@@ -37,6 +37,12 @@ const BOAT_SVG_PATH = "M 0,-10 L -5,-4 L -5,7 L -3,10 L 3,10 L 5,7 L 5,-4 Z";
 // Must be a stable reference — shared with AddressInput
 const LIBRARIES: ("places")[] = ["places"];
 
+// Rotation handle constants
+const RING_DIAMETER = 100;
+const RING_RADIUS = RING_DIAMETER / 2;
+const HANDLE_SIZE = 28;
+const DEG_TO_RAD = Math.PI / 180;
+
 export type MapMode =
   | "idle"
   | "place-impact"
@@ -51,6 +57,7 @@ interface MapViewProps {
   completedPaths: {
     path: LatLng[];
     color: string;
+    rotation?: number;
   }[];
   otherEntityPosition: LatLng | null;
   restPositions: (LatLng | null)[];
@@ -64,6 +71,11 @@ interface MapViewProps {
   basePath?: LatLng[];
   useSatellite?: boolean;
   entitySticker?: string | null;
+  rotationOverlay?: {
+    position: LatLng;
+    rotation: number;
+    onRotate: (rotation: number) => void;
+  } | null;
 }
 
 export function MapView({
@@ -84,6 +96,7 @@ export function MapView({
   basePath = [],
   useSatellite = false,
   entitySticker,
+  rotationOverlay = null,
 }: MapViewProps) {
   const mapRef = useRef<google.maps.Map | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -103,6 +116,12 @@ export function MapView({
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
   useEffect(() => { onPathUpdateRef.current = onPathUpdate; }, [onPathUpdate]);
   useEffect(() => { onDrawEndRef.current = onDrawEnd; }, [onDrawEnd]);
+
+  // Rotation overlay state
+  const [rotationPixel, setRotationPixel] = useState<{x: number; y: number} | null>(null);
+  const isRotatingRef = useRef(false);
+  const rotationCenterPixelRef = useRef<{x: number; y: number} | null>(null);
+  const onRotateRef = useRef<((r: number) => void) | null>(null);
 
   const isDrawMode = mode === "draw-path";
 
@@ -136,6 +155,21 @@ export function MapView({
     const lng = sw.lng() + (x / rect.width) * (ne.lng() - sw.lng());
 
     return { lat, lng };
+  }, []);
+
+  // Convert lat/lng to screen pixel using map bounds (reverse of pixelToLatLng)
+  const latLngToPixel = useCallback((latlng: LatLng): { x: number; y: number } | null => {
+    const map = mapRef.current;
+    const overlay = overlayRef.current;
+    if (!map || !overlay) return null;
+    const bounds = map.getBounds();
+    if (!bounds) return null;
+    const ne = bounds.getNorthEast();
+    const sw = bounds.getSouthWest();
+    const rect = overlay.getBoundingClientRect();
+    const x = ((latlng.lng - sw.lng()) / (ne.lng() - sw.lng())) * rect.width;
+    const y = ((ne.lat() - latlng.lat) / (ne.lat() - sw.lat())) * rect.height;
+    return { x, y };
   }, []);
 
   // Drawing handlers
@@ -238,6 +272,68 @@ export function MapView({
       mapRef.current.panTo({ lat: panToLat, lng: panToLng });
     }
   }, [panToLat, panToLng]);
+
+  // Rotation overlay: sync callback ref
+  useEffect(() => {
+    onRotateRef.current = rotationOverlay?.onRotate ?? null;
+  }, [rotationOverlay?.onRotate]);
+
+  // Rotation overlay: track screen position on map pan/zoom
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !rotationOverlay) {
+      setRotationPixel(null);
+      return;
+    }
+    const update = () => {
+      const pixel = latLngToPixel(rotationOverlay.position);
+      setRotationPixel(pixel);
+      rotationCenterPixelRef.current = pixel;
+    };
+    const listener = map.addListener("bounds_changed", update);
+    update();
+    return () => { google.maps.event.removeListener(listener); };
+  }, [rotationOverlay?.position.lat, rotationOverlay?.position.lng, latLngToPixel, mapReady]);
+
+  // Rotation overlay: global drag listeners
+  useEffect(() => {
+    const handleGlobalMove = (clientX: number, clientY: number) => {
+      if (!isRotatingRef.current || !rotationCenterPixelRef.current) return;
+      const overlay = overlayRef.current;
+      if (!overlay) return;
+      const rect = overlay.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const center = rotationCenterPixelRef.current;
+      const dx = x - center.x;
+      const dy = y - center.y;
+      let angle = Math.atan2(dx, -dy) * (180 / Math.PI);
+      if (angle < 0) angle += 360;
+      onRotateRef.current?.(angle);
+    };
+    const onMouseMove = (e: MouseEvent) => handleGlobalMove(e.clientX, e.clientY);
+    const onTouchMove = (e: TouchEvent) => {
+      if (isRotatingRef.current) e.preventDefault();
+      handleGlobalMove(e.touches[0].clientX, e.touches[0].clientY);
+    };
+    const onEnd = () => { isRotatingRef.current = false; };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onEnd);
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onEnd);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onEnd);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onEnd);
+    };
+  }, []);
+
+  const handleRotationStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isRotatingRef.current = true;
+  }, []);
 
   // Handle taps for placement modes only
   const handleMapClick = useCallback(
@@ -365,6 +461,7 @@ export function MapView({
         {mapReady && completedPaths.map((cp, i) => {
           const boatIcon = getBoatIcon(cp.color, cp.path);
           if (!boatIcon) return null;
+          if (cp.rotation !== undefined) boatIcon.rotation = cp.rotation;
           return (
             <Marker
               key={`boat-completed-${i}`}
@@ -392,6 +489,7 @@ export function MapView({
         {mapReady && currentPath.length > 1 && (() => {
           const boatIcon = getBoatIcon(currentPathColor, currentPath);
           if (!boatIcon) return null;
+          if (rotationOverlay) boatIcon.rotation = rotationOverlay.rotation;
           return (
             <Marker
               position={currentPath[currentPath.length - 1]}
@@ -465,6 +563,55 @@ export function MapView({
           cursor: isDrawMode ? BOAT_CURSOR : undefined,
         }}
       />
+
+      {/* Rotation overlay */}
+      {rotationOverlay && rotationPixel && (
+        <div className="absolute inset-0 z-20 pointer-events-none" style={{ touchAction: "none" }}>
+          {/* Dashed ring */}
+          <div
+            className="absolute rounded-full"
+            style={{
+              width: RING_DIAMETER,
+              height: RING_DIAMETER,
+              left: rotationPixel.x - RING_RADIUS,
+              top: rotationPixel.y - RING_RADIUS,
+              border: "2px dashed rgba(22, 96, 244, 0.5)",
+            }}
+          />
+          {/* Direction line */}
+          <svg
+            className="absolute"
+            style={{ left: rotationPixel.x, top: rotationPixel.y, overflow: "visible" }}
+            width="0"
+            height="0"
+          >
+            <line
+              x1="0"
+              y1="0"
+              x2={RING_RADIUS * Math.sin(rotationOverlay.rotation * DEG_TO_RAD)}
+              y2={-RING_RADIUS * Math.cos(rotationOverlay.rotation * DEG_TO_RAD)}
+              stroke="rgba(22, 96, 244, 0.4)"
+              strokeWidth="2"
+            />
+          </svg>
+          {/* Drag handle */}
+          <div
+            className="absolute pointer-events-auto cursor-grab active:cursor-grabbing"
+            style={{
+              width: HANDLE_SIZE,
+              height: HANDLE_SIZE,
+              borderRadius: "50%",
+              backgroundColor: "#1660F4",
+              border: "3px solid white",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+              left: rotationPixel.x + RING_RADIUS * Math.sin(rotationOverlay.rotation * DEG_TO_RAD) - HANDLE_SIZE / 2,
+              top: rotationPixel.y - RING_RADIUS * Math.cos(rotationOverlay.rotation * DEG_TO_RAD) - HANDLE_SIZE / 2,
+            }}
+            onMouseDown={handleRotationStart}
+            onTouchStart={handleRotationStart}
+          />
+        </div>
+      )}
 
       {/* Custom zoom controls */}
       <div className="absolute right-3 bottom-3 z-30 flex flex-col gap-1">

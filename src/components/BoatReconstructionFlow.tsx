@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   BoatReconstructionState,
   BoatCollisionEntityType,
@@ -95,10 +95,21 @@ export function BoatReconstructionFlow() {
   const [currentPath, setCurrentPath] = useState<LatLng[]>([]);
   const [drawComplete, setDrawComplete] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [boatRotation, setBoatRotation] = useState(0);
+  const rotationInitializedRef = useRef(false);
 
   const isBoat = state.collisionEntityType === "boat";
   const isSwimmer = state.collisionEntityType === "swimmer";
   const isStopped = state.yourBoat.movementType === "stopped";
+
+  // Auto-set rotation from path bearing when draw completes
+  useEffect(() => {
+    if (drawComplete && !rotationInitializedRef.current && currentPath.length >= 2) {
+      const bearing = getPathEndBearing(currentPath);
+      setBoatRotation(bearing ?? 0);
+      rotationInitializedRef.current = true;
+    }
+  }, [drawComplete, currentPath]);
 
   const entitySubType = !isBoat && !isSwimmer && state.otherEntity && "entitySubType" in state.otherEntity
     ? (state.otherEntity as OtherEntityData).entitySubType
@@ -126,6 +137,8 @@ export function BoatReconstructionFlow() {
       setState((prev) => ({ ...prev, currentStep: prevStep.id }));
       setCurrentPath([]);
       setDrawComplete(false);
+      setBoatRotation(0);
+      rotationInitializedRef.current = false;
     }
   };
 
@@ -147,7 +160,7 @@ export function BoatReconstructionFlow() {
   };
 
   const getCompletedPaths = () => {
-    const paths: { path: LatLng[]; color: string }[] = [];
+    const paths: { path: LatLng[]; color: string; rotation?: number }[] = [];
 
     const yourPre = state.yourBoat.preImpactPath;
     const yourPost = state.yourBoat.postImpactPath;
@@ -160,7 +173,7 @@ export function BoatReconstructionFlow() {
       } else {
         fullPath = yourPost;
       }
-      paths.push({ path: fullPath, color: YOUR_PATH_COLOR });
+      paths.push({ path: fullPath, color: YOUR_PATH_COLOR, rotation: state.yourBoat.rotation });
     }
 
     if (isBoat && "preImpactPath" in state.otherEntity) {
@@ -176,7 +189,8 @@ export function BoatReconstructionFlow() {
         } else {
           fullPath = otherPost;
         }
-        paths.push({ path: fullPath, color: OTHER_PATH_COLOR });
+        const otherRotation = (state.otherEntity as BoatData).rotation;
+        paths.push({ path: fullPath, color: OTHER_PATH_COLOR, rotation: otherRotation });
       }
     }
 
@@ -323,6 +337,8 @@ export function BoatReconstructionFlow() {
   const handleRedraw = () => {
     setCurrentPath([]);
     setDrawComplete(false);
+    setBoatRotation(0);
+    rotationInitializedRef.current = false;
   };
 
   const handleAdjust = () => {
@@ -381,6 +397,7 @@ export function BoatReconstructionFlow() {
         ...updatedState.yourBoat,
         preImpactPath: pre,
         postImpactPath: post,
+        rotation: boatRotation,
       };
     } else if (currentId === 10 && isBoat && currentPath.length >= 2 && state.impactPoint) {
       const { pre, post } = splitPathAtImpact(currentPath, state.impactPoint);
@@ -388,6 +405,7 @@ export function BoatReconstructionFlow() {
         ...(updatedState.otherEntity as BoatData),
         preImpactPath: pre,
         postImpactPath: post,
+        rotation: boatRotation,
       };
     }
 
@@ -412,6 +430,8 @@ export function BoatReconstructionFlow() {
     setState(updatedState);
     setCurrentPath([]);
     setDrawComplete(false);
+    setBoatRotation(0);
+    rotationInitializedRef.current = false;
   };
 
   const canProceed = (): boolean => {
@@ -441,6 +461,8 @@ export function BoatReconstructionFlow() {
     setCurrentPath([]);
     setDrawComplete(false);
     setIsFullscreen(false);
+    setBoatRotation(0);
+    rotationInitializedRef.current = false;
   };
 
   const getCurrentPathColor = (): string => {
@@ -478,8 +500,13 @@ export function BoatReconstructionFlow() {
           ? null
           : "Drag the map to reposition the pin. It\u2019s okay if it\u2019s not exact \u2014 just place it as close as you remember.";
       case 9:
+        return drawComplete
+          ? "Drag the blue handle to rotate your vessel\u2019s orientation."
+          : "Make sure the path touches the collision point.";
       case 10:
-        return drawComplete ? null : "Make sure the path touches the collision point.";
+        return drawComplete
+          ? "Drag the blue handle to rotate the other vessel\u2019s orientation."
+          : "Make sure the path touches the collision point.";
       case 11:
         return state.yourBoat.restPosition
           ? "If your vessel came to rest somewhere else, tap that spot instead."
@@ -805,6 +832,15 @@ export function BoatReconstructionFlow() {
               basePath={isDrawStep && !drawComplete && currentPath.length > 0 ? currentPath : []}
               useSatellite={state.isMarina === true}
               entitySticker={entitySticker}
+              rotationOverlay={
+                showConfirmation && currentPath.length >= 2
+                  ? {
+                      position: currentPath[currentPath.length - 1],
+                      rotation: boatRotation,
+                      onRotate: setBoatRotation,
+                    }
+                  : null
+              }
             />
 
             {/* Fullscreen: floating instruction at top */}
