@@ -11,9 +11,11 @@ import { LatLng } from "@/types/reconstruction";
 import { simplifyPath } from "@/lib/simplify";
 import { calculateBearing } from "@/lib/geometry";
 
-const MAP_CONTAINER_STYLE = {
+const MAP_CONTAINER_STYLE: React.CSSProperties = {
   width: "100%",
   height: "100%",
+  position: "relative",
+  zIndex: 0,
 };
 
 // Top-down boat cursor as base64 SVG
