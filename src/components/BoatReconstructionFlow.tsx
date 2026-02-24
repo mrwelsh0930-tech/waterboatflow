@@ -1,0 +1,946 @@
+"use client";
+
+import { useState, useCallback } from "react";
+import {
+  BoatReconstructionState,
+  BoatCollisionEntityType,
+  INITIAL_BOAT_DATA,
+  BOAT_STEPS,
+  LatLng,
+  BoatData,
+  OtherEntityData,
+  WaterBodyType,
+} from "@/types/reconstruction";
+import {
+  getPathEndBearing,
+  calculateApproachAngle,
+  classifyCollision,
+  toPDOFClock,
+  splitPathAtImpact,
+} from "@/lib/geometry";
+import { MapView, MapMode } from "./MapView";
+import { StepIndicator } from "./StepIndicator";
+import { AssuredHeader } from "./AssuredHeader";
+import { WaterBodySelector } from "./WaterBodySelector";
+import { StateCityInput } from "./StateCityInput";
+import { AddressInput } from "./AddressInput";
+import { BoatCollisionTypeSelector } from "./BoatCollisionTypeSelector";
+import { SpeedInput } from "./SpeedInput";
+import { AccelerationInput } from "./AccelerationInput";
+import { BoatSummary } from "./BoatSummary";
+
+const INITIAL_STATE: BoatReconstructionState = {
+  currentStep: 0,
+  waterBodyType: null,
+  stateProvince: null,
+  city: null,
+  embarkationAddress: null,
+  embarkationLocation: null,
+  collisionEntityType: null,
+  impactPoint: null,
+  mapBearingAtImpact: null,
+  collisionTypeOverride: null,
+  isMarina: null,
+  yourBoat: { ...INITIAL_BOAT_DATA, id: "you", label: "Your vessel" },
+  otherEntity: { ...INITIAL_BOAT_DATA, id: "other", label: "Other vessel" },
+  derived: {
+    approachAngle: null,
+    separationAngle: null,
+    collisionType: null,
+    pdofClockApprox: null,
+  },
+};
+
+const MIN_PATH_POINTS = 2;
+
+const YOUR_PATH_COLOR = "#3B82F6";
+const OTHER_PATH_COLOR = "#F59E0B";
+
+const CARD_SHADOW = "0px 1px 3px rgba(0,0,0,0.1), 0px 1px 2px rgba(0,0,0,0.06)";
+
+// Entity sticker mapping for non-boat collisions
+function getEntitySticker(type: BoatCollisionEntityType | null, subType: string | null): string | null {
+  if (!type || type === "boat") return null;
+  if (type === "swimmer") return "\uD83C\uDFCA";
+  if (type === "fixed-property") {
+    switch (subType) {
+      case "dock": return "\u2693";
+      case "buoy": return "\uD83D\uDD34";
+      case "pier": return "\uD83C\uDF09";
+      case "seawall": return "\uD83E\uDDF1";
+      default: return "\u2693";
+    }
+  }
+  if (type === "animal") {
+    switch (subType) {
+      case "manatee": return "\uD83D\uDC0B";
+      case "dolphin": return "\uD83D\uDC2C";
+      case "sea-turtle": return "\uD83D\uDC22";
+      default: return "\uD83D\uDC1F";
+    }
+  }
+  if (type === "object") {
+    switch (subType) {
+      case "debris": return "\uD83E\uDEA8";
+      case "log": return "\uD83E\uDEB5";
+      case "rock": return "\uD83E\uDEA8";
+      default: return "\uD83E\uDEA8";
+    }
+  }
+  return null;
+}
+
+export function BoatReconstructionFlow() {
+  const [state, setState] = useState<BoatReconstructionState>(INITIAL_STATE);
+  const [currentPath, setCurrentPath] = useState<LatLng[]>([]);
+  const [drawComplete, setDrawComplete] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const isBoat = state.collisionEntityType === "boat";
+  const isSwimmer = state.collisionEntityType === "swimmer";
+  const isStopped = state.yourBoat.movementType === "stopped";
+
+  const entitySubType = !isBoat && !isSwimmer && state.otherEntity && "entitySubType" in state.otherEntity
+    ? (state.otherEntity as OtherEntityData).entitySubType
+    : null;
+  const entitySticker = getEntitySticker(state.collisionEntityType, entitySubType);
+
+  // Step filtering
+  const activeSteps = BOAT_STEPS.filter((step) => {
+    // Skip "other path" for non-boat collisions
+    if (!isBoat && step.id === 10) return false;
+    // Skip acceleration step if stopped
+    if (isStopped && step.id === 5) return false;
+    // Skip marina + drawing steps for swimmer (no map interaction needed)
+    if (isSwimmer && (step.id === 6 || step.id === 7 || step.id === 8 || step.id === 9 || step.id === 10 || step.id === 11)) return false;
+    return true;
+  });
+
+  const currentStepIndex = activeSteps.findIndex(
+    (s) => s.id === state.currentStep
+  );
+
+  const goBack = () => {
+    if (currentStepIndex > 0) {
+      const prevStep = activeSteps[currentStepIndex - 1];
+      setState((prev) => ({ ...prev, currentStep: prevStep.id }));
+      setCurrentPath([]);
+      setDrawComplete(false);
+    }
+  };
+
+  const getMapMode = (): MapMode => {
+    if (drawComplete && (state.currentStep === 9 || state.currentStep === 10)) {
+      return "idle";
+    }
+    switch (state.currentStep) {
+      case 8:
+        return state.impactPoint ? "idle" : "place-impact";
+      case 9:
+      case 10:
+        return "draw-path";
+      case 11:
+        return "place-rest";
+      default:
+        return "idle";
+    }
+  };
+
+  const getCompletedPaths = () => {
+    const paths: { path: LatLng[]; color: string }[] = [];
+
+    const yourPre = state.yourBoat.preImpactPath;
+    const yourPost = state.yourBoat.postImpactPath;
+    if (yourPre.length > 0 || yourPost.length > 0) {
+      let fullPath: LatLng[];
+      if (yourPre.length > 0 && yourPost.length > 1) {
+        fullPath = [...yourPre, ...yourPost.slice(1)];
+      } else if (yourPre.length > 0) {
+        fullPath = yourPre;
+      } else {
+        fullPath = yourPost;
+      }
+      paths.push({ path: fullPath, color: YOUR_PATH_COLOR });
+    }
+
+    if (isBoat && "preImpactPath" in state.otherEntity) {
+      const other = state.otherEntity as BoatData;
+      const otherPre = other.preImpactPath;
+      const otherPost = other.postImpactPath;
+      if (otherPre.length > 0 || otherPost.length > 0) {
+        let fullPath: LatLng[];
+        if (otherPre.length > 0 && otherPost.length > 1) {
+          fullPath = [...otherPre, ...otherPost.slice(1)];
+        } else if (otherPre.length > 0) {
+          fullPath = otherPre;
+        } else {
+          fullPath = otherPost;
+        }
+        paths.push({ path: fullPath, color: OTHER_PATH_COLOR });
+      }
+    }
+
+    return paths;
+  };
+
+  // Step 0: Water body type
+  const handleWaterBodySelect = (type: WaterBodyType) => {
+    setState((prev) => ({
+      ...prev,
+      waterBodyType: type,
+      currentStep: 1,
+    }));
+  };
+
+  // Step 1: State + City
+  const handleStateCityConfirm = (stateProvince: string, city: string) => {
+    setState((prev) => ({
+      ...prev,
+      stateProvince,
+      city,
+      currentStep: 2,
+    }));
+  };
+
+  // Step 2: Embarkation point
+  const handleEmbarkationConfirm = (address: string, location: LatLng) => {
+    setState((prev) => ({
+      ...prev,
+      embarkationAddress: address,
+      embarkationLocation: location,
+      currentStep: 3,
+    }));
+  };
+
+  // Step 3: Collision type
+  const handleCollisionTypeSelect = (type: BoatCollisionEntityType, subType: string | null) => {
+    const otherEntity: BoatData | OtherEntityData =
+      type === "boat"
+        ? { ...INITIAL_BOAT_DATA, id: "other", label: "Other vessel" }
+        : {
+            type,
+            entitySubType: subType,
+            label:
+              type === "fixed-property"
+                ? "Fixed property"
+                : type === "animal"
+                  ? "Animal"
+                  : type === "swimmer"
+                    ? "Swimmer"
+                    : "Object",
+            position: null,
+            description: "",
+          };
+
+    setState((prev) => ({
+      ...prev,
+      currentStep: 4,
+      collisionEntityType: type,
+      otherEntity,
+    }));
+  };
+
+  // Step 4: Speed
+  const handleSpeedComplete = (data: {
+    movementType: "forward" | "reverse" | "stopped";
+    speedEstimate: number | null;
+    speedUnit: "mph" | "knots";
+  }) => {
+    // Swimmer skips all map steps — jump straight to summary
+    // Stopped skips acceleration — jump to marina (or summary for swimmer)
+    let nextStep: number;
+    if (isSwimmer) {
+      nextStep = 12; // summary
+    } else if (data.movementType === "stopped") {
+      nextStep = 6; // marina (acceleration is skipped for stopped)
+    } else {
+      nextStep = 5; // acceleration
+    }
+
+    setState((prev) => ({
+      ...prev,
+      yourBoat: {
+        ...prev.yourBoat,
+        movementType: data.movementType,
+        speedEstimate: data.speedEstimate,
+        speedUnit: data.speedUnit,
+      },
+      currentStep: nextStep,
+    }));
+  };
+
+  // Step 5: Acceleration
+  const handleAccelerationComplete = (trend: "accelerating" | "decelerating" | "constant" | "unknown") => {
+    setState((prev) => ({
+      ...prev,
+      yourBoat: {
+        ...prev.yourBoat,
+        speedTrend: trend,
+      },
+      // Swimmer skips all map steps
+      currentStep: prev.collisionEntityType === "swimmer" ? 12 : 6,
+    }));
+  };
+
+  // Step 6: Marina area
+  const handleMarinaArea = (isMarina: boolean) => {
+    setState((prev) => ({
+      ...prev,
+      isMarina,
+      currentStep: 7,
+    }));
+  };
+
+  const handleMapClick = useCallback(
+    (latlng: LatLng) => {
+      if (state.currentStep === 8) {
+        setState((prev) => ({ ...prev, impactPoint: latlng }));
+      } else if (state.currentStep === 11) {
+        setState((prev) => ({
+          ...prev,
+          yourBoat: { ...prev.yourBoat, restPosition: latlng },
+        }));
+      }
+    },
+    [state.currentStep]
+  );
+
+  const handleImpactDrag = useCallback(
+    (latlng: LatLng) => {
+      setState((prev) => ({ ...prev, impactPoint: latlng }));
+    },
+    []
+  );
+
+  const handlePathUpdate = useCallback((path: LatLng[]) => {
+    setCurrentPath(path);
+  }, []);
+
+  const handleDrawEnd = useCallback(() => {
+    setDrawComplete(true);
+  }, []);
+
+  const handleRedraw = () => {
+    setCurrentPath([]);
+    setDrawComplete(false);
+  };
+
+  const handleAdjust = () => {
+    setDrawComplete(false);
+  };
+
+  const handleCollisionTypeOverride = (type: string) => {
+    setState((prev) => ({
+      ...prev,
+      collisionTypeOverride: type,
+    }));
+  };
+
+  const computeDerived = (s: BoatReconstructionState): BoatReconstructionState => {
+    const yourBearing = getPathEndBearing(s.yourBoat.preImpactPath);
+    const updated = { ...s };
+    updated.yourBoat = {
+      ...s.yourBoat,
+      approachBearing: yourBearing,
+    };
+
+    const isBoatCollision = s.collisionEntityType === "boat";
+    if (isBoatCollision && "preImpactPath" in s.otherEntity) {
+      const otherBoat = s.otherEntity as BoatData;
+      const otherBearing = getPathEndBearing(otherBoat.preImpactPath);
+
+      if (yourBearing !== null && otherBearing !== null) {
+        const angle = calculateApproachAngle(yourBearing, otherBearing);
+        updated.derived = {
+          approachAngle: angle,
+          separationAngle: null,
+          collisionType: classifyCollision(angle),
+          pdofClockApprox: toPDOFClock(angle),
+        };
+      }
+    }
+
+    if (s.yourBoat.postImpactPath.length >= 2) {
+      const postBearing = getPathEndBearing(s.yourBoat.postImpactPath);
+      updated.yourBoat.separationBearing = postBearing;
+      if (yourBearing !== null && postBearing !== null) {
+        updated.yourBoat.headingChange = postBearing - yourBearing;
+      }
+    }
+
+    return updated;
+  };
+
+  const goToNextStep = () => {
+    const currentId = state.currentStep;
+    let updatedState = { ...state };
+
+    if (currentId === 9 && currentPath.length >= 2 && state.impactPoint) {
+      const { pre, post } = splitPathAtImpact(currentPath, state.impactPoint);
+      updatedState.yourBoat = {
+        ...updatedState.yourBoat,
+        preImpactPath: pre,
+        postImpactPath: post,
+      };
+    } else if (currentId === 10 && isBoat && currentPath.length >= 2 && state.impactPoint) {
+      const { pre, post } = splitPathAtImpact(currentPath, state.impactPoint);
+      updatedState.otherEntity = {
+        ...(updatedState.otherEntity as BoatData),
+        preImpactPath: pre,
+        postImpactPath: post,
+      };
+    }
+
+    updatedState = computeDerived(updatedState);
+
+    const nextActiveStep = activeSteps[currentStepIndex + 1];
+    if (nextActiveStep) {
+      updatedState.currentStep = nextActiveStep.id;
+    }
+
+    // Auto-populate rest position from path endpoint
+    if (nextActiveStep && nextActiveStep.id === 11) {
+      const postPath = updatedState.yourBoat.postImpactPath;
+      if (postPath.length > 0) {
+        updatedState.yourBoat = {
+          ...updatedState.yourBoat,
+          restPosition: postPath[postPath.length - 1],
+        };
+      }
+    }
+
+    setState(updatedState);
+    setCurrentPath([]);
+    setDrawComplete(false);
+  };
+
+  const canProceed = (): boolean => {
+    switch (state.currentStep) {
+      case 0:
+      case 1:
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+        return false; // These steps have their own handlers
+      case 8:
+        return state.impactPoint !== null;
+      case 9:
+      case 10:
+        return currentPath.length >= MIN_PATH_POINTS;
+      case 11:
+        return state.yourBoat.restPosition !== null;
+      default:
+        return false;
+    }
+  };
+
+  const handleStartOver = () => {
+    setState(INITIAL_STATE);
+    setCurrentPath([]);
+    setDrawComplete(false);
+    setIsFullscreen(false);
+  };
+
+  const getCurrentPathColor = (): string => {
+    if (state.currentStep === 10) return OTHER_PATH_COLOR;
+    return YOUR_PATH_COLOR;
+  };
+
+  const getMapInstruction = (): string => {
+    switch (state.currentStep) {
+      case 8:
+        return state.impactPoint
+          ? "Drag the pin to adjust, or confirm below."
+          : "Tap to place the collision point.";
+      case 9:
+        return drawComplete
+          ? "Does this look like the path taken by your vessel?"
+          : "Draw the path your vessel traveled \u2014 just your best recollection.";
+      case 10:
+        return drawComplete
+          ? "Does this look like the path taken by the other vessel?"
+          : "Draw the path the other vessel traveled \u2014 just your best recollection.";
+      case 11:
+        return state.yourBoat.restPosition
+          ? "We placed your vessel where your path ended. Tap to adjust."
+          : "Tap where your vessel came to rest.";
+      default:
+        return "";
+    }
+  };
+
+  const getMapSubInstruction = (): string | null => {
+    switch (state.currentStep) {
+      case 8:
+        return state.impactPoint
+          ? null
+          : "Drag the map to reposition the pin. It\u2019s okay if it\u2019s not exact \u2014 just place it as close as you remember.";
+      case 9:
+      case 10:
+        return drawComplete ? null : "Make sure the path touches the collision point.";
+      case 11:
+        return state.yourBoat.restPosition
+          ? "If your vessel came to rest somewhere else, tap that spot instead."
+          : null;
+      default:
+        return null;
+    }
+  };
+
+  const hasYourPath = state.yourBoat.preImpactPath.length > 0;
+  const hasOtherPath = isBoat && "preImpactPath" in state.otherEntity &&
+    (state.otherEntity as BoatData).preImpactPath.length > 0;
+
+  // ─── Shared layout wrappers ───
+  const PageShell = ({
+    children,
+    showBack = true,
+  }: {
+    children: React.ReactNode;
+    showBack?: boolean;
+  }) => (
+    <div className="fixed inset-0 flex flex-col bg-[#E2E8F0]">
+      <AssuredHeader onBack={showBack ? goBack : undefined} showBack={showBack} />
+      {children}
+      <StepIndicator
+        currentStep={currentStepIndex}
+        totalSteps={activeSteps.length}
+      />
+    </div>
+  );
+
+  const Card = ({
+    children,
+    className = "",
+  }: {
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <div
+      className={`bg-white w-[342px] rounded-[6px] overflow-visible ${className}`}
+      style={{ boxShadow: CARD_SHADOW }}
+    >
+      {children}
+    </div>
+  );
+
+  const PrimaryButton = ({
+    children,
+    onClick,
+    disabled = false,
+    className = "",
+  }: {
+    children: React.ReactNode;
+    onClick: () => void;
+    disabled?: boolean;
+    className?: string;
+  }) => (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-full h-[55px] bg-[#1660F4] rounded-[8px] text-white text-[16px] font-normal leading-[24px] active:bg-[#1250D4] transition-colors disabled:bg-[#94A3B8] disabled:cursor-not-allowed ${className}`}
+    >
+      {children}
+    </button>
+  );
+
+  // ─── Step 0: Water body type ───
+  if (state.currentStep === 0) {
+    return (
+      <PageShell showBack={false}>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <WaterBodySelector onSelect={handleWaterBodySelect} />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 1: State + City ───
+  if (state.currentStep === 1) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <StateCityInput onConfirm={handleStateCityConfirm} />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 2: Embarkation point ───
+  if (state.currentStep === 2) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <AddressInput
+              onConfirm={handleEmbarkationConfirm}
+              title="Where did you embark from?"
+              subtitle="Enter the address or name of the marina, dock, pier, port, or nearby landmark where you embarked."
+              helpText="You can search by marina name, dock name, pier, port, boat ramp, or any nearby landmark."
+              placeholder="e.g. Marina Bay, Pier 39, or 123 Harbor Rd"
+            />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 3: Collision type ───
+  if (state.currentStep === 3) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <BoatCollisionTypeSelector onSelect={handleCollisionTypeSelect} />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 4: Speed/movement ───
+  if (state.currentStep === 4) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <SpeedInput
+              vehicleLabel="your vessel"
+              onComplete={handleSpeedComplete}
+            />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 5: Acceleration ───
+  if (state.currentStep === 5) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <AccelerationInput onComplete={handleAccelerationComplete} />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 6: Marina area ───
+  if (state.currentStep === 6) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <div className="flex flex-col items-center w-full">
+              <h2 className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569] text-center mb-[10px]">
+                Did the collision occur in a marina or dense boating area?
+              </h2>
+              <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569] text-center mb-8">
+                This helps us show you the best map view.
+              </p>
+              <div className="w-full space-y-3">
+                <button
+                  onClick={() => handleMarinaArea(true)}
+                  className="w-full flex items-center gap-4 p-4 border border-[#D4D4D4] rounded-[8px] hover:border-[#1660F4] hover:bg-[#F1F5F9] active:bg-[#E2E8F0] transition-all text-left"
+                >
+                  <span className="text-2xl">{"\u2693"}</span>
+                  <p className="font-medium text-[14px] leading-[20px] text-[#475569]">Yes, marina or dense area</p>
+                </button>
+                <button
+                  onClick={() => handleMarinaArea(false)}
+                  className="w-full flex items-center gap-4 p-4 border border-[#D4D4D4] rounded-[8px] hover:border-[#1660F4] hover:bg-[#F1F5F9] active:bg-[#E2E8F0] transition-all text-left"
+                >
+                  <span className="text-2xl">{"\uD83C\uDF0A"}</span>
+                  <p className="font-medium text-[14px] leading-[20px] text-[#475569]">No, open water</p>
+                </button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 7: Pre-draw instruction ───
+  if (state.currentStep === 7) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-6 flex flex-col gap-8 items-center">
+            <div className="flex flex-col gap-4 text-center w-full">
+              <p className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569]">
+                Now we&apos;ll use a simple drawing tool to show what happened.
+              </p>
+              <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569]">
+                On the next screen, you&apos;ll use your finger to draw {isBoat ? "each vessel\u2019s" : "your vessel\u2019s"} path, leading up to and after the collision.
+              </p>
+              <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#94A3B8] mt-2">
+                This is just a rough sketch — it doesn&apos;t need to be exact.
+              </p>
+            </div>
+
+            {/* Illustration — boat paths */}
+            <div className="bg-[#F1F5F9] rounded-[8px] p-6 flex items-center justify-center w-full">
+              <svg width="200" height="100" viewBox="0 0 200 100" fill="none">
+                <line x1="20" y1="50" x2="120" y2="50" stroke="#3B82F6" strokeWidth="6" strokeLinecap="round"/>
+                <line x1="100" y1="20" x2="100" y2="90" stroke="#EF4444" strokeWidth="6" strokeLinecap="round"/>
+                <circle cx="100" cy="50" r="8" fill="#EF4444" stroke="white" strokeWidth="3"/>
+                {/* Boat shapes instead of car shapes */}
+                <path d="M120,44 L116,47 L116,53 L117,56 L123,56 L124,53 L124,47 Z" fill="#3B82F6" stroke="white" strokeWidth="1.5"/>
+                <path d="M94,78 L97,75 L103,75 L106,78 L103,81 L97,81 Z" fill="#EF4444" stroke="white" strokeWidth="1.5" transform="rotate(90 100 78)"/>
+              </svg>
+            </div>
+
+            <PrimaryButton onClick={goToNextStep}>
+              Continue
+            </PrimaryButton>
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 12: Summary ───
+  if (state.currentStep === 12) {
+    return (
+      <PageShell>
+        <div className="flex-1 overflow-y-auto flex flex-col items-center py-6">
+          <Card className="py-8 px-6">
+            <BoatSummary
+              state={state}
+              onStartOver={handleStartOver}
+              onCollisionTypeOverride={handleCollisionTypeOverride}
+            />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Map-based steps (8-11) ───
+  const otherEntityPos =
+    !isBoat && !isSwimmer && "position" in state.otherEntity
+      ? (state.otherEntity as OtherEntityData).position
+      : null;
+
+  const restPositions = [
+    state.yourBoat.restPosition,
+    isBoat && "restPosition" in state.otherEntity
+      ? (state.otherEntity as BoatData).restPosition
+      : null,
+  ];
+
+  const isDrawStep = state.currentStep === 9 || state.currentStep === 10;
+  const showConfirmation = isDrawStep && drawComplete && currentPath.length >= MIN_PATH_POINTS;
+  const subInstruction = getMapSubInstruction();
+
+  const vehicleLabelPills = (bottomClass: string) =>
+    (hasYourPath || (isDrawStep && state.currentStep === 10 && currentPath.length > 0) || hasOtherPath) ? (
+      <div className={`absolute ${bottomClass} left-3 z-20 space-y-1.5`}>
+        {(hasYourPath || (state.currentStep === 9 && currentPath.length > 0)) && (
+          <div className="flex items-center gap-2 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full shadow-sm">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: YOUR_PATH_COLOR }} />
+            <span className="text-xs font-medium text-[#475569]">Your vessel</span>
+          </div>
+        )}
+        {(hasOtherPath || (state.currentStep === 10 && currentPath.length > 0)) && (
+          <div className="flex items-center gap-2 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full shadow-sm">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: OTHER_PATH_COLOR }} />
+            <span className="text-xs font-medium text-[#475569]">Other vessel</span>
+          </div>
+        )}
+      </div>
+    ) : null;
+
+  return (
+    <div className="fixed inset-0 flex flex-col bg-[#E2E8F0]">
+      {!isFullscreen && <AssuredHeader onBack={goBack} />}
+
+      <div className={`flex-1 ${isFullscreen ? "flex flex-col" : "flex flex-col items-center py-6"} min-h-0`}>
+        <div
+          className={isFullscreen
+            ? "flex flex-col flex-1 min-h-0"
+            : "bg-white w-[342px] rounded-[6px] overflow-hidden flex flex-col flex-1 min-h-0"
+          }
+          style={isFullscreen ? undefined : { boxShadow: CARD_SHADOW }}
+        >
+          {/* Instruction text */}
+          {!isFullscreen && (
+            <div className="px-8 py-6 text-center shrink-0">
+              <p className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569]">
+                {getMapInstruction()}
+              </p>
+              {subInstruction && (
+                <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569] mt-[10px]">
+                  {subInstruction}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Map container */}
+          <div className="flex-1 relative min-h-0">
+            <MapView
+              mode={getMapMode()}
+              impactPoint={state.impactPoint}
+              currentPath={currentPath}
+              currentPathColor={getCurrentPathColor()}
+              completedPaths={getCompletedPaths()}
+              otherEntityPosition={otherEntityPos}
+              restPositions={restPositions}
+              onMapClick={handleMapClick}
+              onPathUpdate={handlePathUpdate}
+              onDrawEnd={handleDrawEnd}
+              onImpactDrag={handleImpactDrag}
+              centerOverride={state.embarkationLocation}
+              panToPoint={isDrawStep ? state.impactPoint : null}
+              basePath={isDrawStep && !drawComplete && currentPath.length > 0 ? currentPath : []}
+              useSatellite={state.isMarina === true}
+              entitySticker={entitySticker}
+            />
+
+            {/* Fullscreen: floating instruction at top */}
+            {isFullscreen && (
+              <div className="absolute top-3 left-3 right-14 z-20 pointer-events-none">
+                <div className="bg-white/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg text-center">
+                  <p className="font-medium text-[15px] leading-[22px] text-[#475569]">
+                    {getMapInstruction()}
+                  </p>
+                  {subInstruction && (
+                    <p className="font-normal text-[13px] leading-[18px] text-[#94A3B8] mt-1">
+                      {subInstruction}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Fullscreen: collapse button */}
+            {isFullscreen && (
+              <button
+                onClick={() => setIsFullscreen(false)}
+                className="absolute top-3 right-3 z-[200] w-10 h-10 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg flex items-center justify-center active:bg-[#F1F5F9]"
+              >
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M7 2v5H2M11 16v-5h5" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
+
+            {/* Fullscreen: floating CTA at bottom */}
+            {isFullscreen && (
+              <div className="absolute bottom-4 left-3 right-3 z-20">
+                {showConfirmation ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleRedraw}
+                        className="flex-1 h-[44px] bg-white/95 backdrop-blur-sm border border-[#D4D4D4] rounded-[8px] text-[14px] font-medium text-[#475569] shadow-lg active:bg-[#F1F5F9]"
+                      >
+                        Redraw
+                      </button>
+                      <button
+                        onClick={handleAdjust}
+                        className="flex-1 h-[44px] bg-white/95 backdrop-blur-sm border border-[#D4D4D4] rounded-[8px] text-[14px] font-medium text-[#475569] shadow-lg active:bg-[#F1F5F9]"
+                      >
+                        Adjust
+                      </button>
+                    </div>
+                    <button
+                      onClick={goToNextStep}
+                      className="w-full h-[50px] bg-[#1660F4] rounded-[8px] text-[15px] font-medium text-white shadow-lg active:bg-[#1250D4]"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                ) : !isDrawStep ? (
+                  <button
+                    onClick={goToNextStep}
+                    disabled={!canProceed()}
+                    className="w-full h-[50px] bg-[#1660F4] rounded-[8px] text-white text-[15px] font-medium shadow-lg active:bg-[#1250D4] disabled:bg-[#94A3B8] transition-colors"
+                  >
+                    {state.currentStep === 8 ? "Confirm collision point" : "Continue"}
+                  </button>
+                ) : null}
+              </div>
+            )}
+
+            {/* Normal: expand button */}
+            {!isFullscreen && (
+              <button
+                onClick={() => setIsFullscreen(true)}
+                className="absolute top-3 right-3 z-[200] w-9 h-9 bg-white/90 backdrop-blur-sm rounded-lg shadow-md flex items-center justify-center active:bg-[#F1F5F9]"
+              >
+                <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+                  <path d="M11 2h5v5M7 16H2v-5" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
+
+            {/* Vessel label pills */}
+            {vehicleLabelPills(isFullscreen ? "bottom-20" : "bottom-3")}
+          </div>
+
+          {/* CTA button inside card for non-draw, non-fullscreen map steps */}
+          {!isFullscreen && !isDrawStep && (
+            <div className="shrink-0 px-6 py-4">
+              <PrimaryButton onClick={goToNextStep} disabled={!canProceed()}>
+                {state.currentStep === 8 ? "Confirm collision point" : "Continue"}
+              </PrimaryButton>
+            </div>
+          )}
+        </div>
+
+        {/* Redraw/Adjust/Confirm outside card for draw steps (non-fullscreen) */}
+        {!isFullscreen && showConfirmation && (
+          <div className="w-[342px] mt-4 flex flex-col gap-3">
+            <div className="flex gap-3">
+              <button
+                onClick={handleRedraw}
+                className="flex-1 h-[48px] bg-white border border-[#D4D4D4] rounded-[8px] text-[15px] font-normal text-[#475569] active:bg-[#F1F5F9] transition-colors"
+                style={{ boxShadow: CARD_SHADOW }}
+              >
+                Redraw
+              </button>
+              <button
+                onClick={handleAdjust}
+                className="flex-1 h-[48px] bg-white border border-[#D4D4D4] rounded-[8px] text-[15px] font-normal text-[#475569] active:bg-[#F1F5F9] transition-colors"
+                style={{ boxShadow: CARD_SHADOW }}
+              >
+                Adjust
+              </button>
+            </div>
+            <button
+              onClick={goToNextStep}
+              className="w-full h-[55px] bg-[#1660F4] rounded-[8px] text-[16px] font-normal text-white active:bg-[#1250D4] transition-colors"
+            >
+              Confirm
+            </button>
+          </div>
+        )}
+
+        {/* Spacer for draw steps before confirmation (non-fullscreen) */}
+        {!isFullscreen && isDrawStep && !showConfirmation && (
+          <div className="w-[342px] mt-4 opacity-0 pointer-events-none">
+            <div className="h-[55px]" />
+          </div>
+        )}
+      </div>
+
+      {!isFullscreen && (
+        <StepIndicator
+          currentStep={currentStepIndex}
+          totalSteps={activeSteps.length}
+        />
+      )}
+    </div>
+  );
+}

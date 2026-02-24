@@ -1,0 +1,95 @@
+export type BoatCollisionEntityType = "boat" | "fixed-property" | "animal" | "object" | "swimmer";
+
+export type WaterBodyType = "ocean" | "lake" | "river" | "other";
+
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+export interface BoatData {
+  id: string;
+  label: string;
+  preImpactPath: LatLng[];
+  postImpactPath: LatLng[];
+  restPosition: LatLng | null;
+  approachBearing: number | null;
+  separationBearing: number | null;
+  headingChange: number | null;
+  speedEstimate: number | null;
+  speedUnit: "mph" | "knots";
+  movementType: "forward" | "reverse" | "stopped" | null;
+  speedTrend: "accelerating" | "decelerating" | "constant" | "unknown" | null;
+  rotation: number; // 0-360 degrees, orientation of boat at impact
+}
+
+export interface OtherEntityData {
+  type: BoatCollisionEntityType;
+  entitySubType: string | null;
+  label: string;
+  position: LatLng | null;
+  description: string;
+}
+
+export interface DerivedData {
+  approachAngle: number | null;
+  separationAngle: number | null;
+  collisionType: string | null;
+  pdofClockApprox: number | null;
+}
+
+export interface BoatReconstructionState {
+  currentStep: number;
+  waterBodyType: WaterBodyType | null;
+  stateProvince: string | null;
+  city: string | null;
+  embarkationAddress: string | null;
+  embarkationLocation: LatLng | null;
+  collisionEntityType: BoatCollisionEntityType | null;
+  impactPoint: LatLng | null;
+  mapBearingAtImpact: number | null;
+  collisionTypeOverride: string | null;
+  isMarina: boolean | null;
+  yourBoat: BoatData;
+  otherEntity: BoatData | OtherEntityData;
+  derived: DerivedData;
+}
+
+export const INITIAL_BOAT_DATA: BoatData = {
+  id: "",
+  label: "",
+  preImpactPath: [],
+  postImpactPath: [],
+  restPosition: null,
+  approachBearing: null,
+  separationBearing: null,
+  headingChange: null,
+  speedEstimate: null,
+  speedUnit: "mph",
+  movementType: null,
+  speedTrend: null,
+  rotation: 0,
+};
+
+export const BOAT_STEPS = [
+  { id: 0, title: "Body of water", description: "What type of water?" },
+  { id: 1, title: "Location", description: "State and city" },
+  { id: 2, title: "Embarkation point", description: "Where did you depart from?" },
+  { id: 3, title: "What happened?", description: "What did your vessel collide with?" },
+  { id: 4, title: "Before the collision", description: "How was your vessel moving?" },
+  { id: 5, title: "Speed change", description: "Were you speeding up or slowing down?" },
+  { id: 6, title: "Marina area", description: "Was this in a marina?" },
+  { id: 7, title: "Drawing tool", description: "How this works" },
+  { id: 8, title: "Collision point", description: "Confirm the collision point" },
+  { id: 9, title: "Your path", description: "Draw your vessel's path" },
+  { id: 10, title: "Other path", description: "Draw the other vessel's path" },
+  { id: 11, title: "Rest position", description: "Where did your vessel end up?" },
+  { id: 12, title: "Summary", description: "Review your reconstruction" },
+];
+
+export const BOAT_COLLISION_TYPE_OPTIONS = [
+  "T-Bone",
+  "Rear-End",
+  "Head-On",
+  "Sideswipe",
+];

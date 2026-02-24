@@ -1,0 +1,492 @@
+"use client";
+
+import { useCallback, useRef, useState, useEffect } from "react";
+import {
+  GoogleMap,
+  useJsApiLoader,
+  Marker,
+  Polyline,
+} from "@react-google-maps/api";
+import { LatLng } from "@/types/reconstruction";
+import { simplifyPath } from "@/lib/simplify";
+import { calculateBearing } from "@/lib/geometry";
+
+const MAP_CONTAINER_STYLE = {
+  width: "100%",
+  height: "100%",
+};
+
+// Top-down boat cursor as base64 SVG
+const BOAT_CURSOR = `url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIiBmaWxsPSJub25lIj48cGF0aCBkPSJNMTYgMkwxMSA4TDExIDI0TDEzIDI4SDE5TDIxIDI0TDIxIDhMMTYgMloiIGZpbGw9IiMzQjgyRjYiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0xMyAxMEgxOSIgc3Ryb2tlPSIjOTNDNUZEIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+") 16 16, crosshair`;
+
+const DEFAULT_CENTER = { lat: 25.7617, lng: -80.1918 }; // Miami — water-centric default
+const DEFAULT_ZOOM = 16;
+
+const IMPACT_PULSE_ICON = {
+  path: 0, // google.maps.SymbolPath.CIRCLE
+  scale: 14,
+  fillColor: "#EF4444",
+  fillOpacity: 0.8,
+  strokeColor: "#FFFFFF",
+  strokeWeight: 3,
+};
+
+// Top-down boat shape (pointing north by default)
+const BOAT_SVG_PATH = "M 0,-10 L -5,-4 L -5,7 L -3,10 L 3,10 L 5,7 L 5,-4 Z";
+
+// Must be a stable reference — shared with AddressInput
+const LIBRARIES: ("places")[] = ["places"];
+
+export type MapMode =
+  | "idle"
+  | "place-impact"
+  | "draw-path"
+  | "place-rest";
+
+interface MapViewProps {
+  mode: MapMode;
+  impactPoint: LatLng | null;
+  currentPath: LatLng[];
+  currentPathColor?: string;
+  completedPaths: {
+    path: LatLng[];
+    color: string;
+  }[];
+  otherEntityPosition: LatLng | null;
+  restPositions: (LatLng | null)[];
+  onMapClick: (latlng: LatLng) => void;
+  onPathUpdate: (path: LatLng[]) => void;
+  onDrawEnd?: () => void;
+  onImpactDrag?: (latlng: LatLng) => void;
+  vehicleLabels?: string[];
+  centerOverride?: LatLng | null;
+  panToPoint?: LatLng | null;
+  basePath?: LatLng[];
+  useSatellite?: boolean;
+  entitySticker?: string | null;
+}
+
+export function MapView({
+  mode,
+  impactPoint,
+  currentPath,
+  currentPathColor = "#10B981",
+  completedPaths,
+  otherEntityPosition,
+  restPositions,
+  onMapClick,
+  onPathUpdate,
+  onDrawEnd,
+  onImpactDrag,
+  vehicleLabels = ["Your boat", "Other"],
+  centerOverride,
+  panToPoint,
+  basePath = [],
+  useSatellite = false,
+  entitySticker,
+}: MapViewProps) {
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const isDrawingRef = useRef(false);
+  const drawPointsRef = useRef<LatLng[]>([]);
+
+  // Refs for stable access in event handlers
+  const modeRef = useRef(mode);
+  const basePathRef = useRef(basePath);
+  const onMapClickRef = useRef(onMapClick);
+  const onPathUpdateRef = useRef(onPathUpdate);
+  const onDrawEndRef = useRef(onDrawEnd);
+
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { basePathRef.current = basePath; }, [basePath]);
+  useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
+  useEffect(() => { onPathUpdateRef.current = onPathUpdate; }, [onPathUpdate]);
+  useEffect(() => { onDrawEndRef.current = onDrawEnd; }, [onDrawEnd]);
+
+  const isDrawMode = mode === "draw-path";
+
+  const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+    libraries: LIBRARIES,
+  });
+
+  const onMapLoad = useCallback((map: google.maps.Map) => {
+    mapRef.current = map;
+    setMapReady(true);
+  }, []);
+
+  // Convert screen pixel to lat/lng using map bounds
+  const pixelToLatLng = useCallback((clientX: number, clientY: number): LatLng | null => {
+    const map = mapRef.current;
+    const overlay = overlayRef.current;
+    if (!map || !overlay) return null;
+
+    const rect = overlay.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    const bounds = map.getBounds();
+    if (!bounds) return null;
+
+    const ne = bounds.getNorthEast();
+    const sw = bounds.getSouthWest();
+
+    const lat = ne.lat() - (y / rect.height) * (ne.lat() - sw.lat());
+    const lng = sw.lng() + (x / rect.width) * (ne.lng() - sw.lng());
+
+    return { lat, lng };
+  }, []);
+
+  // Drawing handlers
+  const handleDrawStart = useCallback((clientX: number, clientY: number) => {
+    if (modeRef.current !== "draw-path") return;
+    isDrawingRef.current = true;
+    const point = pixelToLatLng(clientX, clientY);
+    if (point) {
+      const base = basePathRef.current;
+      if (base.length > 0) {
+        drawPointsRef.current = [...base, point];
+        onPathUpdateRef.current([...base, point]);
+      } else {
+        drawPointsRef.current = [point];
+        onPathUpdateRef.current([point]);
+      }
+    }
+  }, [pixelToLatLng]);
+
+  const handleDrawMove = useCallback((clientX: number, clientY: number) => {
+    if (!isDrawingRef.current) return;
+    const point = pixelToLatLng(clientX, clientY);
+    if (point) {
+      drawPointsRef.current.push(point);
+      const simplified = simplifyPath(drawPointsRef.current, 0.000005);
+      onPathUpdateRef.current(simplified);
+    }
+  }, [pixelToLatLng]);
+
+  const handleDrawEnd = useCallback(() => {
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
+    const simplified = simplifyPath(drawPointsRef.current, 0.00001);
+    onPathUpdateRef.current(simplified);
+    drawPointsRef.current = [];
+    if (simplified.length >= 2 && onDrawEndRef.current) {
+      onDrawEndRef.current();
+    }
+  }, []);
+
+  // Attach touch/mouse events to drawing overlay
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (modeRef.current !== "draw-path") return;
+      e.preventDefault();
+      handleDrawStart(e.touches[0].clientX, e.touches[0].clientY);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!isDrawingRef.current) return;
+      e.preventDefault();
+      handleDrawMove(e.touches[0].clientX, e.touches[0].clientY);
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      handleDrawEnd();
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      if (modeRef.current !== "draw-path") return;
+      handleDrawStart(e.clientX, e.clientY);
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      handleDrawMove(e.clientX, e.clientY);
+    };
+    const onMouseUp = () => {
+      handleDrawEnd();
+    };
+
+    overlay.addEventListener("touchstart", onTouchStart, { passive: false });
+    overlay.addEventListener("touchmove", onTouchMove, { passive: false });
+    overlay.addEventListener("touchend", onTouchEnd, { passive: false });
+    overlay.addEventListener("mousedown", onMouseDown);
+    overlay.addEventListener("mousemove", onMouseMove);
+    overlay.addEventListener("mouseup", onMouseUp);
+
+    return () => {
+      overlay.removeEventListener("touchstart", onTouchStart);
+      overlay.removeEventListener("touchmove", onTouchMove);
+      overlay.removeEventListener("touchend", onTouchEnd);
+      overlay.removeEventListener("mousedown", onMouseDown);
+      overlay.removeEventListener("mousemove", onMouseMove);
+      overlay.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [handleDrawStart, handleDrawMove, handleDrawEnd, isDrawMode]);
+
+  // Disable map dragging when in draw mode
+  useEffect(() => {
+    if (mapRef.current) {
+      mapRef.current.setOptions({ draggable: !isDrawMode });
+    }
+  }, [isDrawMode]);
+
+  // Pan to a specific point when requested
+  const panToLat = panToPoint?.lat ?? null;
+  const panToLng = panToPoint?.lng ?? null;
+  useEffect(() => {
+    if (panToLat !== null && panToLng !== null && mapRef.current) {
+      mapRef.current.panTo({ lat: panToLat, lng: panToLng });
+    }
+  }, [panToLat, panToLng]);
+
+  // Handle taps for placement modes only
+  const handleMapClick = useCallback(
+    (e: google.maps.MapMouseEvent) => {
+      if (!e.latLng) return;
+      const currentMode = modeRef.current;
+      if (currentMode === "place-impact" || currentMode === "place-rest") {
+        onMapClickRef.current({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+      }
+    },
+    []
+  );
+
+  // Helper: get boat icon for a path endpoint
+  const getBoatIcon = (color: string, path: LatLng[]) => {
+    if (path.length < 2) return null;
+    const bearing = calculateBearing(
+      path[path.length - 2],
+      path[path.length - 1]
+    );
+    return {
+      path: BOAT_SVG_PATH,
+      scale: 2.2,
+      fillColor: color,
+      fillOpacity: 0.95,
+      strokeColor: "#FFFFFF",
+      strokeWeight: 2,
+      rotation: bearing,
+    };
+  };
+
+  if (loadError) {
+    return (
+      <div className="flex items-center justify-center h-full bg-gray-100">
+        <div className="text-center p-4">
+          <p className="text-red-600 font-medium">Failed to load map</p>
+          <p className="text-sm text-gray-500 mt-1">Check your API key configuration</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLoaded) {
+    return (
+      <div className="flex items-center justify-center h-full bg-gray-100">
+        <div className="animate-pulse text-gray-500">Loading map...</div>
+      </div>
+    );
+  }
+
+  const center = centerOverride || DEFAULT_CENTER;
+
+  return (
+    <div className="relative w-full h-full">
+      <GoogleMap
+        mapContainerStyle={MAP_CONTAINER_STYLE}
+        center={impactPoint || center}
+        zoom={DEFAULT_ZOOM}
+        onLoad={onMapLoad}
+        onClick={handleMapClick}
+        options={{
+          disableDefaultUI: true,
+          zoomControl: false,
+          mapTypeId: useSatellite ? "satellite" : "roadmap",
+          gestureHandling: "greedy",
+          clickableIcons: false,
+        }}
+      >
+        {/* Impact point — red circle (only when no entity sticker) */}
+        {impactPoint && !entitySticker && (
+          <Marker
+            position={impactPoint}
+            icon={IMPACT_PULSE_ICON}
+            title="Impact point"
+            zIndex={100}
+            draggable={mode === "place-impact" || mode === "idle"}
+            onDragEnd={(e) => {
+              if (e.latLng && onImpactDrag) {
+                onImpactDrag({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+              }
+            }}
+          />
+        )}
+
+        {/* Entity sticker at impact point */}
+        {impactPoint && entitySticker && mapReady && (
+          <Marker
+            position={impactPoint}
+            icon={{
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 18,
+              fillColor: "#FFFFFF",
+              fillOpacity: 1,
+              strokeColor: "#E2E8F0",
+              strokeWeight: 2,
+            }}
+            label={{
+              text: entitySticker,
+              fontSize: "22px",
+            }}
+            title="Collision object"
+            zIndex={100}
+            draggable={mode === "place-impact" || mode === "idle"}
+            onDragEnd={(e) => {
+              if (e.latLng && onImpactDrag) {
+                onImpactDrag({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+              }
+            }}
+          />
+        )}
+
+        {/* Completed paths + boat icons at endpoints */}
+        {completedPaths.map((cp, i) => (
+          <Polyline
+            key={`completed-${i}`}
+            path={cp.path}
+            options={{
+              strokeColor: cp.color,
+              strokeWeight: 6,
+              strokeOpacity: 0.85,
+              geodesic: true,
+            }}
+          />
+        ))}
+        {mapReady && completedPaths.map((cp, i) => {
+          const boatIcon = getBoatIcon(cp.color, cp.path);
+          if (!boatIcon) return null;
+          return (
+            <Marker
+              key={`boat-completed-${i}`}
+              position={cp.path[cp.path.length - 1]}
+              icon={boatIcon}
+              zIndex={60}
+            />
+          );
+        })}
+
+        {/* Current drawing path */}
+        {mapReady && currentPath.length > 1 && (
+          <Polyline
+            path={currentPath}
+            options={{
+              strokeColor: currentPathColor,
+              strokeWeight: 6,
+              strokeOpacity: 0.9,
+              geodesic: true,
+            }}
+          />
+        )}
+
+        {/* Boat icon at end of current path */}
+        {mapReady && currentPath.length > 1 && (() => {
+          const boatIcon = getBoatIcon(currentPathColor, currentPath);
+          if (!boatIcon) return null;
+          return (
+            <Marker
+              position={currentPath[currentPath.length - 1]}
+              icon={boatIcon}
+              zIndex={60}
+            />
+          );
+        })()}
+
+        {/* Start marker for current path */}
+        {mapReady && currentPath.length > 0 && (
+          <Marker
+            position={currentPath[0]}
+            icon={{
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 7,
+              fillColor: currentPathColor,
+              fillOpacity: 1,
+              strokeColor: "#FFFFFF",
+              strokeWeight: 2,
+            }}
+            zIndex={50}
+          />
+        )}
+
+        {/* Other entity position */}
+        {otherEntityPosition && (
+          <Marker
+            position={otherEntityPosition}
+            icon={{
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 10,
+              fillColor: "#F59E0B",
+              fillOpacity: 0.9,
+              strokeColor: "#FFFFFF",
+              strokeWeight: 2,
+            }}
+            title="Other entity"
+            zIndex={90}
+          />
+        )}
+
+        {/* Rest position markers */}
+        {restPositions.map(
+          (pos, i) =>
+            pos && (
+              <Marker
+                key={`rest-${i}`}
+                position={pos}
+                icon={{
+                  path: google.maps.SymbolPath.CIRCLE,
+                  scale: 8,
+                  fillColor: "#8B5CF6",
+                  fillOpacity: 0.9,
+                  strokeColor: "#FFFFFF",
+                  strokeWeight: 2,
+                }}
+                title={`${vehicleLabels[i]} rest position`}
+                zIndex={80}
+              />
+            )
+        )}
+      </GoogleMap>
+
+      {/* Drawing overlay */}
+      <div
+        ref={overlayRef}
+        className={`absolute inset-0 ${isDrawMode ? "z-10" : "-z-10 pointer-events-none"}`}
+        style={{
+          touchAction: "none",
+          cursor: isDrawMode ? BOAT_CURSOR : undefined,
+        }}
+      />
+
+      {/* Custom zoom controls */}
+      <div className="absolute right-3 bottom-3 z-30 flex flex-col gap-1">
+        <button
+          onClick={() => {
+            const map = mapRef.current;
+            if (map) map.setZoom((map.getZoom() || 16) + 1);
+          }}
+          className="w-10 h-10 bg-white rounded shadow-md flex items-center justify-center text-xl font-bold text-[#666] active:bg-[#F1F5F9]"
+        >
+          +
+        </button>
+        <button
+          onClick={() => {
+            const map = mapRef.current;
+            if (map) map.setZoom((map.getZoom() || 16) - 1);
+          }}
+          className="w-10 h-10 bg-white rounded shadow-md flex items-center justify-center text-xl font-bold text-[#666] active:bg-[#F1F5F9]"
+        >
+          &minus;
+        </button>
+      </div>
+    </div>
+  );
+}
