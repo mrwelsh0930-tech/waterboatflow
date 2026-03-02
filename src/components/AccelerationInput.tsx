@@ -5,6 +5,7 @@ import { useState } from "react";
 type SpeedTrend = "accelerating" | "decelerating" | "constant" | "unknown";
 
 interface AccelerationInputProps {
+  vehicleLabel?: string;
   onComplete: (trend: SpeedTrend) => void;
 }
 
@@ -15,16 +16,16 @@ const OPTIONS: { value: SpeedTrend; label: string; icon: string }[] = [
   { value: "unknown", label: "I don\u2019t know", icon: "\uD83E\uDD37" },
 ];
 
-export function AccelerationInput({ onComplete }: AccelerationInputProps) {
+export function AccelerationInput({ vehicleLabel = "you", onComplete }: AccelerationInputProps) {
   const [selected, setSelected] = useState<SpeedTrend | null>(null);
 
   return (
     <div className="flex flex-col items-center w-full">
       <h2 className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569] text-center mb-[10px]">
-        Leading up to the collision, were you...
+        Leading up to the collision, {vehicleLabel === "you" ? "were you" : `was ${vehicleLabel}`}...
       </h2>
       <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569] text-center mb-8">
-        Were you changing speed before the collision?
+        {vehicleLabel === "you" ? "Were you" : `Was ${vehicleLabel}`} changing speed before the collision?
       </p>
 
       <div className="w-full space-y-3 mb-8">

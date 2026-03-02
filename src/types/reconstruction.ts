@@ -80,6 +80,8 @@ export const BOAT_STEPS = [
   { id: 8, title: "Collision point", description: "Confirm the collision point" },
   { id: 4, title: "Before the collision", description: "How was your vessel moving?" },
   { id: 5, title: "Speed change", description: "Were you speeding up or slowing down?" },
+  { id: 13, title: "Other vessel movement", description: "How was the other vessel moving?" },
+  { id: 14, title: "Other vessel speed change", description: "Was the other vessel speeding up or slowing down?" },
   { id: 7, title: "Drawing tool", description: "How this works" },
   { id: 9, title: "Your path", description: "Draw your vessel's path" },
   { id: 10, title: "Other path", description: "Draw the other vessel's path" },

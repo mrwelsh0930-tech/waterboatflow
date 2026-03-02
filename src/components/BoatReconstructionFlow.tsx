@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   BoatReconstructionState,
   BoatCollisionEntityType,
@@ -91,16 +92,23 @@ function getEntitySticker(type: BoatCollisionEntityType | null, subType: string 
 }
 
 export function BoatReconstructionFlow() {
+  const searchParams = useSearchParams();
+  const rotationEnabled = searchParams.get("rotation") === "true";
+
   const [state, setState] = useState<BoatReconstructionState>(INITIAL_STATE);
   const [currentPath, setCurrentPath] = useState<LatLng[]>([]);
   const [drawComplete, setDrawComplete] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [boatRotation, setBoatRotation] = useState(0);
   const rotationInitializedRef = useRef(false);
+  const mapZoomRef = useRef<number>(16);
 
   const isBoat = state.collisionEntityType === "boat";
   const isSwimmer = state.collisionEntityType === "swimmer";
   const isStopped = state.yourBoat.movementType === "stopped";
+  const isOtherStopped = isBoat && "movementType" in state.otherEntity
+    ? (state.otherEntity as BoatData).movementType === "stopped"
+    : false;
 
   // Auto-set rotation from approach bearing toward the impact point
   useEffect(() => {
@@ -122,8 +130,12 @@ export function BoatReconstructionFlow() {
   const activeSteps = BOAT_STEPS.filter((step) => {
     // Skip "other path" for non-boat collisions
     if (!isBoat && step.id === 10) return false;
-    // Skip acceleration step if stopped
+    // Skip other vessel speed/acceleration for non-boat collisions
+    if (!isBoat && (step.id === 13 || step.id === 14)) return false;
+    // Skip acceleration step if stopped (your vessel)
     if (isStopped && step.id === 5) return false;
+    // Skip other vessel acceleration if other vessel is stopped
+    if (isOtherStopped && step.id === 14) return false;
     // Skip marina + drawing steps for swimmer (no map interaction needed)
     if (isSwimmer && (step.id === 6 || step.id === 7 || step.id === 8 || step.id === 9 || step.id === 10)) return false;
     return true;
@@ -160,7 +172,7 @@ export function BoatReconstructionFlow() {
   };
 
   const getCompletedPaths = () => {
-    const paths: { path: LatLng[]; color: string; rotation?: number }[] = [];
+    const paths: { path: LatLng[]; color: string; rotation?: number; reverse?: boolean }[] = [];
 
     const yourPre = state.yourBoat.preImpactPath;
     const yourPost = state.yourBoat.postImpactPath;
@@ -173,7 +185,7 @@ export function BoatReconstructionFlow() {
       } else {
         fullPath = yourPost;
       }
-      paths.push({ path: fullPath, color: YOUR_PATH_COLOR, rotation: state.yourBoat.rotation });
+      paths.push({ path: fullPath, color: YOUR_PATH_COLOR, rotation: state.yourBoat.rotation, reverse: state.yourBoat.movementType === "reverse" });
     }
 
     if (isBoat && "preImpactPath" in state.otherEntity) {
@@ -190,7 +202,7 @@ export function BoatReconstructionFlow() {
           fullPath = otherPost;
         }
         const otherRotation = (state.otherEntity as BoatData).rotation;
-        paths.push({ path: fullPath, color: OTHER_PATH_COLOR, rotation: otherRotation });
+        paths.push({ path: fullPath, color: OTHER_PATH_COLOR, rotation: otherRotation, reverse: (state.otherEntity as BoatData).movementType === "reverse" });
       }
     }
 
@@ -262,12 +274,12 @@ export function BoatReconstructionFlow() {
     speedUnit: "mph" | "knots";
   }) => {
     // Swimmer skips drawing — jump straight to summary
-    // Stopped skips acceleration — jump to drawing instruction
+    // Stopped skips acceleration — but boat-to-boat still needs other vessel questions
     let nextStep: number;
     if (isSwimmer) {
       nextStep = 12; // summary
     } else if (data.movementType === "stopped") {
-      nextStep = 7; // drawing instruction (acceleration is skipped for stopped)
+      nextStep = isBoat ? 13 : 7; // boat: other vessel speed, else: drawing instruction
     } else {
       nextStep = 5; // acceleration
     }
@@ -284,7 +296,7 @@ export function BoatReconstructionFlow() {
     }));
   };
 
-  // Step 5: Acceleration — now goes to drawing instruction (step 7)
+  // Step 5: Acceleration — boat-to-boat goes to other vessel speed (13), else drawing instruction (7)
   const handleAccelerationComplete = (trend: "accelerating" | "decelerating" | "constant" | "unknown") => {
     setState((prev) => ({
       ...prev,
@@ -292,7 +304,37 @@ export function BoatReconstructionFlow() {
         ...prev.yourBoat,
         speedTrend: trend,
       },
-      currentStep: prev.collisionEntityType === "swimmer" ? 12 : 7,
+      currentStep: prev.collisionEntityType === "swimmer" ? 12 : prev.collisionEntityType === "boat" ? 13 : 7,
+    }));
+  };
+
+  // Step 13: Other vessel speed
+  const handleOtherSpeedComplete = (data: {
+    movementType: "forward" | "reverse" | "stopped";
+    speedEstimate: number | null;
+    speedUnit: "mph" | "knots";
+  }) => {
+    setState((prev) => ({
+      ...prev,
+      otherEntity: {
+        ...(prev.otherEntity as BoatData),
+        movementType: data.movementType,
+        speedEstimate: data.speedEstimate,
+        speedUnit: data.speedUnit,
+      },
+      currentStep: data.movementType === "stopped" ? 7 : 14,
+    }));
+  };
+
+  // Step 14: Other vessel acceleration
+  const handleOtherAccelerationComplete = (trend: "accelerating" | "decelerating" | "constant" | "unknown") => {
+    setState((prev) => ({
+      ...prev,
+      otherEntity: {
+        ...(prev.otherEntity as BoatData),
+        speedTrend: trend,
+      },
+      currentStep: 7,
     }));
   };
 
@@ -427,6 +469,8 @@ export function BoatReconstructionFlow() {
       case 4:
       case 5:
       case 6:
+      case 13:
+      case 14:
         return false; // These steps have their own handlers
       case 8:
         return state.impactPoint !== null;
@@ -460,12 +504,12 @@ export function BoatReconstructionFlow() {
           : "Tap to place the collision point.";
       case 9:
         return drawComplete
-          ? "Does this look like the path taken by your vessel?"
-          : "Draw the path your vessel traveled \u2014 just your best recollection.";
+          ? "Does this look like the collision path taken by your vessel?"
+          : "Draw the collision path your vessel traveled \u2014 just your best recollection.";
       case 10:
         return drawComplete
-          ? "Does this look like the path taken by the other vessel?"
-          : "Draw the path the other vessel traveled \u2014 just your best recollection.";
+          ? "Does this look like the collision path taken by the other vessel?"
+          : "Draw the collision path the other vessel traveled \u2014 just your best recollection.";
       default:
         return "";
     }
@@ -479,11 +523,11 @@ export function BoatReconstructionFlow() {
           : "Drag the map to reposition the pin. It\u2019s okay if it\u2019s not exact \u2014 just place it as close as you remember.";
       case 9:
         return drawComplete
-          ? "Drag the blue handle to rotate your vessel\u2019s orientation."
+          ? (rotationEnabled ? "Drag the blue handle to rotate your vessel\u2019s orientation." : null)
           : "Make sure the path touches the collision point.";
       case 10:
         return drawComplete
-          ? "Drag the blue handle to rotate the other vessel\u2019s orientation."
+          ? (rotationEnabled ? "Drag the blue handle to rotate the other vessel\u2019s orientation." : null)
           : "Make sure the path touches the collision point.";
       default:
         return null;
@@ -629,6 +673,38 @@ export function BoatReconstructionFlow() {
         <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
           <Card className="py-8 px-8 flex flex-col gap-8 items-center">
             <AccelerationInput onComplete={handleAccelerationComplete} />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 13: Other vessel speed ───
+  if (state.currentStep === 13) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <SpeedInput
+              vehicleLabel="the other vessel"
+              onComplete={handleOtherSpeedComplete}
+            />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 14: Other vessel acceleration ───
+  if (state.currentStep === 14) {
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-8 items-center">
+            <AccelerationInput
+              vehicleLabel="the other vessel"
+              onComplete={handleOtherAccelerationComplete}
+            />
           </Card>
         </div>
       </PageShell>
@@ -802,8 +878,15 @@ export function BoatReconstructionFlow() {
               basePath={isDrawStep && !drawComplete && currentPath.length > 0 ? currentPath : []}
               useSatellite={state.isMarina === true}
               entitySticker={entitySticker}
+              reverseBoat={
+                state.currentStep === 9
+                  ? state.yourBoat.movementType === "reverse"
+                  : state.currentStep === 10 && isBoat && "movementType" in state.otherEntity
+                    ? (state.otherEntity as BoatData).movementType === "reverse"
+                    : false
+              }
               rotationOverlay={
-                showConfirmation && currentPath.length >= 2 && state.impactPoint
+                rotationEnabled && showConfirmation && currentPath.length >= 2 && state.impactPoint
                   ? {
                       position: state.impactPoint,
                       rotation: boatRotation,
@@ -811,6 +894,8 @@ export function BoatReconstructionFlow() {
                     }
                   : null
               }
+              zoomLevel={mapZoomRef.current}
+              onZoomChanged={(z) => { mapZoomRef.current = z; }}
             />
 
             {/* Fullscreen: floating instruction at top */}

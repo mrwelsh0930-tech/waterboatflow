@@ -1,5 +1,10 @@
+import { Suspense } from "react";
 import { BoatReconstructionFlow } from "@/components/BoatReconstructionFlow";
 
 export default function Home() {
-  return <BoatReconstructionFlow />;
+  return (
+    <Suspense>
+      <BoatReconstructionFlow />
+    </Suspense>
+  );
 }

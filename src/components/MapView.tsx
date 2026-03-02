@@ -18,8 +18,10 @@ const MAP_CONTAINER_STYLE: React.CSSProperties = {
   zIndex: 0,
 };
 
-// Top-down boat cursor as base64 SVG
-const BOAT_CURSOR = `url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIiBmaWxsPSJub25lIj48cGF0aCBkPSJNMTYgMkwxMSA4TDExIDI0TDEzIDI4SDE5TDIxIDI0TDIxIDhMMTYgMloiIGZpbGw9IiMzQjgyRjYiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0xMyAxMEgxOSIgc3Ryb2tlPSIjOTNDNUZEIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+") 16 16, crosshair`;
+// Top-down boat cursor as base64 SVG (bow pointing up = forward)
+const BOAT_CURSOR_FORWARD = `url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIiBmaWxsPSJub25lIj48cGF0aCBkPSJNMTYgMkwxMSA4TDExIDI0TDEzIDI4SDE5TDIxIDI0TDIxIDhMMTYgMloiIGZpbGw9IiMzQjgyRjYiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0xMyAxMEgxOSIgc3Ryb2tlPSIjOTNDNUZEIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+") 16 16, crosshair`;
+// Same boat rotated 180° (stern pointing up = reverse)
+const BOAT_CURSOR_REVERSE = `url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIiBmaWxsPSJub25lIj48ZyB0cmFuc2Zvcm09InJvdGF0ZSgxODAgMTYgMTYpIj48cGF0aCBkPSJNMTYgMkwxMSA4TDExIDI0TDEzIDI4SDE5TDIxIDI0TDIxIDhMMTYgMloiIGZpbGw9IiMzQjgyRjYiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0xMyAxMEgxOSIgc3Ryb2tlPSIjOTNDNUZEIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9nPjwvc3ZnPg==") 16 16, crosshair`;
 
 const DEFAULT_CENTER = { lat: 25.7617, lng: -80.1918 }; // Miami — water-centric default
 const DEFAULT_ZOOM = 16;
@@ -60,6 +62,7 @@ interface MapViewProps {
     path: LatLng[];
     color: string;
     rotation?: number;
+    reverse?: boolean;
   }[];
   otherEntityPosition: LatLng | null;
   restPositions: (LatLng | null)[];
@@ -78,6 +81,9 @@ interface MapViewProps {
     rotation: number;
     onRotate: (rotation: number) => void;
   } | null;
+  reverseBoat?: boolean;
+  zoomLevel?: number;
+  onZoomChanged?: (zoom: number) => void;
 }
 
 export function MapView({
@@ -99,6 +105,9 @@ export function MapView({
   useSatellite = false,
   entitySticker,
   rotationOverlay = null,
+  reverseBoat = false,
+  zoomLevel,
+  onZoomChanged,
 }: MapViewProps) {
   const mapRef = useRef<google.maps.Map | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -134,7 +143,14 @@ export function MapView({
 
   const onMapLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
-    setMapReady(true);
+    // Bounds may not be ready immediately — wait for idle event
+    if (map.getBounds()) {
+      setMapReady(true);
+    } else {
+      google.maps.event.addListenerOnce(map, "idle", () => {
+        setMapReady(true);
+      });
+    }
   }, []);
 
   // Convert screen pixel to lat/lng using map bounds
@@ -257,14 +273,14 @@ export function MapView({
       overlay.removeEventListener("mousemove", onMouseMove);
       overlay.removeEventListener("mouseup", onMouseUp);
     };
-  }, [handleDrawStart, handleDrawMove, handleDrawEnd, isDrawMode]);
+  }, [handleDrawStart, handleDrawMove, handleDrawEnd, isDrawMode, mapReady]);
 
   // Disable map dragging when in draw mode
   useEffect(() => {
     if (mapRef.current) {
       mapRef.current.setOptions({ draggable: !isDrawMode });
     }
-  }, [isDrawMode]);
+  }, [isDrawMode, mapReady]);
 
   // Pan to a specific point when requested
   const panToLat = panToPoint?.lat ?? null;
@@ -393,8 +409,13 @@ export function MapView({
       <GoogleMap
         mapContainerStyle={MAP_CONTAINER_STYLE}
         center={impactPoint || center}
-        zoom={DEFAULT_ZOOM}
+        zoom={zoomLevel ?? DEFAULT_ZOOM}
         onLoad={onMapLoad}
+        onZoomChanged={() => {
+          if (mapRef.current && onZoomChanged) {
+            onZoomChanged(mapRef.current.getZoom() || DEFAULT_ZOOM);
+          }
+        }}
         onClick={handleMapClick}
         options={{
           disableDefaultUI: true,
@@ -464,6 +485,7 @@ export function MapView({
           const boatIcon = getBoatIcon(cp.color, cp.path);
           if (!boatIcon) return null;
           if (cp.rotation !== undefined) boatIcon.rotation = cp.rotation;
+          if (cp.reverse) boatIcon.rotation = (boatIcon.rotation + 180) % 360;
           return (
             <Marker
               key={`boat-completed-${i}`}
@@ -492,6 +514,7 @@ export function MapView({
           const boatIcon = getBoatIcon(currentPathColor, currentPath);
           if (!boatIcon) return null;
           if (rotationOverlay) boatIcon.rotation = rotationOverlay.rotation;
+          if (reverseBoat) boatIcon.rotation = (boatIcon.rotation + 180) % 360;
           return (
             <Marker
               position={currentPath[currentPath.length - 1]}
@@ -556,13 +579,19 @@ export function MapView({
         )}
       </GoogleMap>
 
-      {/* Drawing overlay */}
+      {/* Drawing overlay — inline styles to guarantee z-index/pointer-events */}
       <div
         ref={overlayRef}
-        className={`absolute inset-0 ${isDrawMode ? "z-10" : "-z-10 pointer-events-none"}`}
         style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: isDrawMode ? 10 : -10,
+          pointerEvents: isDrawMode ? "auto" : "none",
           touchAction: "none",
-          cursor: isDrawMode ? BOAT_CURSOR : undefined,
+          cursor: isDrawMode ? (reverseBoat ? BOAT_CURSOR_REVERSE : BOAT_CURSOR_FORWARD) : undefined,
         }}
       />
 

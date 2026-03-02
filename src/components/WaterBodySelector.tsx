@@ -8,8 +8,8 @@ interface WaterBodySelectorProps {
 
 const OPTIONS: { type: WaterBodyType; label: string; icon: string }[] = [
   { type: "ocean", label: "Ocean", icon: "\uD83C\uDF0A" },
-  { type: "lake", label: "Lake / Pond", icon: "\uD83C\uDFDE\uFE0F" },
-  { type: "river", label: "River / Stream", icon: "\uD83C\uDFDE\uFE0F" },
+  { type: "lake", label: "Lake", icon: "\uD83C\uDFDE\uFE0F" },
+  { type: "river", label: "River", icon: "\uD83C\uDFDE\uFE0F" },
   { type: "other", label: "Other", icon: "\uD83D\uDCA7" },
 ];
 

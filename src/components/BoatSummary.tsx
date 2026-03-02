@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BoatReconstructionState } from "@/types/reconstruction";
+import { BoatReconstructionState, BoatData, OtherEntityData } from "@/types/reconstruction";
 import { BOAT_COLLISION_TYPE_OPTIONS } from "@/types/reconstruction";
 
 interface BoatSummaryProps {
@@ -19,24 +19,37 @@ const TREND_LABELS: Record<string, string> = {
 
 const WATER_BODY_LABELS: Record<string, string> = {
   ocean: "Ocean",
-  lake: "Lake / Pond",
-  river: "River / Stream",
+  lake: "Lake",
+  river: "River",
   other: "Other body of water",
 };
 
 export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: BoatSummaryProps) {
   const isBoat = state.collisionEntityType === "boat";
-  const otherLabel = isBoat
-    ? "Another boat"
-    : state.collisionEntityType === "fixed-property"
+
+  const SUB_TYPE_LABELS: Record<string, string> = {
+    dock: "Dock", buoy: "Buoy", pier: "Pier", seawall: "Seawall",
+    manatee: "Manatee", dolphin: "Dolphin", "sea-turtle": "Sea turtle",
+    debris: "Debris", log: "Log / Tree", rock: "Rock / Reef",
+  };
+
+  const otherLabel = (() => {
+    if (isBoat) return "Another boat";
+    if (state.collisionEntityType === "swimmer") return "A swimmer";
+    if (!isBoat && "entitySubType" in state.otherEntity) {
+      const subType = (state.otherEntity as OtherEntityData).entitySubType;
+      if (subType && subType !== "other" && SUB_TYPE_LABELS[subType]) {
+        return SUB_TYPE_LABELS[subType];
+      }
+    }
+    return state.collisionEntityType === "fixed-property"
       ? "Fixed property"
       : state.collisionEntityType === "animal"
         ? "An animal"
         : state.collisionEntityType === "object"
           ? "An object"
-          : state.collisionEntityType === "swimmer"
-            ? "A swimmer"
-            : "Unknown";
+          : "Unknown";
+  })();
 
   const movementLabel = state.yourBoat.movementType === "forward"
     ? "Moving forward"
@@ -261,19 +274,58 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
         </div>
 
         {/* Other boat info */}
-        {isBoat && (
-          <div className="bg-[#F1F5F9] rounded-[8px] p-4">
-            <p className="text-[12px] text-[#F59E0B] uppercase tracking-wide mb-2">
-              Other vessel
-            </p>
-            <div className="space-y-2 text-[14px]">
-              <div className="flex justify-between">
-                <span className="text-[#94A3B8]">Path</span>
-                <span className="font-medium text-[#1660F4]">Recorded</span>
+        {isBoat && (() => {
+          const other = state.otherEntity as BoatData;
+          const otherMovementLabel = other.movementType === "forward"
+            ? "Moving forward"
+            : other.movementType === "reverse"
+              ? "Reversing"
+              : other.movementType === "stopped"
+                ? "Anchored / Stopped"
+                : null;
+          const otherSpeedDisplay = other.speedEstimate !== null
+            ? `~${other.speedEstimate} ${other.speedUnit}`
+            : null;
+          return (
+            <div className="bg-[#F1F5F9] rounded-[8px] p-4">
+              <p className="text-[12px] text-[#F59E0B] uppercase tracking-wide mb-2">
+                Other vessel
+              </p>
+              <div className="space-y-2 text-[14px]">
+                {otherMovementLabel && (
+                  <div className="flex justify-between">
+                    <span className="text-[#94A3B8]">Before the collision</span>
+                    <span className="font-medium text-[#475569]">{otherMovementLabel}</span>
+                  </div>
+                )}
+                {otherSpeedDisplay && (
+                  <div className="flex justify-between">
+                    <span className="text-[#94A3B8]">Estimated speed</span>
+                    <span className="font-medium text-[#475569]">{otherSpeedDisplay}</span>
+                  </div>
+                )}
+                {!otherSpeedDisplay && other.movementType && other.movementType !== "stopped" && (
+                  <div className="flex justify-between">
+                    <span className="text-[#94A3B8]">Estimated speed</span>
+                    <span className="font-medium text-[#94A3B8]">Not sure</span>
+                  </div>
+                )}
+                {other.speedTrend && (
+                  <div className="flex justify-between">
+                    <span className="text-[#94A3B8]">Speed change</span>
+                    <span className="font-medium text-[#475569]">
+                      {TREND_LABELS[other.speedTrend] || other.speedTrend}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-[#94A3B8]">Path</span>
+                  <span className="font-medium text-[#1660F4]">Recorded</span>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Confirmation */}
         <div className="bg-[#F1F5F9] rounded-[8px] p-4 text-center">
