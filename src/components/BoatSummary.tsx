@@ -28,9 +28,17 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
   const isBoat = state.collisionEntityType === "boat";
 
   const SUB_TYPE_LABELS: Record<string, string> = {
-    dock: "Dock", buoy: "Buoy", pier: "Pier", seawall: "Seawall",
-    manatee: "Manatee", dolphin: "Dolphin", "sea-turtle": "Sea turtle",
-    debris: "Debris", log: "Log / Tree", rock: "Rock / Reef",
+    // Property (both)
+    dock: "Dock", "boat-lift": "Boat lift", "bridge-piling": "Bridge piling",
+    buoy: "Buoy", pier: "Pier", seawall: "Seawall",
+    // Saltwater animals
+    dolphin: "Dolphin", manatee: "Manatee", "sea-turtle": "Sea turtle",
+    // Freshwater animals
+    fish: "Fish", duck: "Duck", goose: "Goose", turtle: "Turtle",
+    // Saltwater objects
+    sandbar: "Sandbar", "floating-debris": "Floating debris", reef: "Reef", "submerged-object": "Submerged object",
+    // Freshwater objects
+    rock: "Rock", log: "Log", stump: "Stump",
   };
 
   const otherLabel = (() => {

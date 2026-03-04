@@ -652,7 +652,7 @@ export function BoatReconstructionFlow() {
       <PageShell>
         <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
           <Card className="py-8 px-8 flex flex-col gap-8 items-center">
-            <BoatCollisionTypeSelector onSelect={handleCollisionTypeSelect} />
+            <BoatCollisionTypeSelector onSelect={handleCollisionTypeSelect} waterBodyType={state.waterBodyType} />
           </Card>
         </div>
       </PageShell>
