@@ -84,7 +84,7 @@ export function BoatCollisionTypeSelector({ onSelect }: BoatCollisionTypeSelecto
   return (
     <div className="flex flex-col items-center w-full">
       <h2 className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569] text-center mb-[10px]">
-        What did your vessel collide with?
+        What did your boat collide with?
       </h2>
       <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569] text-center mb-8">
         Select what your boat made contact with.

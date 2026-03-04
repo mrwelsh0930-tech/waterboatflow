@@ -42,8 +42,8 @@ const INITIAL_STATE: BoatReconstructionState = {
   mapBearingAtImpact: null,
   collisionTypeOverride: null,
   isMarina: null,
-  yourBoat: { ...INITIAL_BOAT_DATA, id: "you", label: "Your vessel" },
-  otherEntity: { ...INITIAL_BOAT_DATA, id: "other", label: "Other vessel" },
+  yourBoat: { ...INITIAL_BOAT_DATA, id: "you", label: "Your boat" },
+  otherEntity: { ...INITIAL_BOAT_DATA, id: "other", label: "Other boat" },
   derived: {
     approachAngle: null,
     separationAngle: null,
@@ -143,11 +143,11 @@ export function BoatReconstructionFlow() {
   const activeSteps = BOAT_STEPS.filter((step) => {
     // Skip "other path" for non-boat collisions
     if (!isBoat && step.id === 10) return false;
-    // Skip other vessel speed/acceleration for non-boat collisions
+    // Skip other boat speed/acceleration for non-boat collisions
     if (!isBoat && (step.id === 13 || step.id === 14)) return false;
-    // Skip acceleration step if stopped (your vessel)
+    // Skip acceleration step if stopped (your boat)
     if (isStopped && step.id === 5) return false;
-    // Skip other vessel acceleration if other vessel is stopped
+    // Skip other boat acceleration if other boat is stopped
     if (isOtherStopped && step.id === 14) return false;
     // Skip marina + drawing steps for swimmer (no map interaction needed)
     if (isSwimmer && (step.id === 6 || step.id === 7 || step.id === 8 || step.id === 9 || step.id === 10)) return false;
@@ -255,7 +255,7 @@ export function BoatReconstructionFlow() {
   const handleCollisionTypeSelect = (type: BoatCollisionEntityType, subType: string | null) => {
     const otherEntity: BoatData | OtherEntityData =
       type === "boat"
-        ? { ...INITIAL_BOAT_DATA, id: "other", label: "Other vessel" }
+        ? { ...INITIAL_BOAT_DATA, id: "other", label: "Other boat" }
         : {
             type,
             entitySubType: subType,
@@ -287,12 +287,12 @@ export function BoatReconstructionFlow() {
     speedUnit: "mph" | "knots";
   }) => {
     // Swimmer skips drawing — jump straight to summary
-    // Stopped skips acceleration — but boat-to-boat still needs other vessel questions
+    // Stopped skips acceleration — but boat-to-boat still needs other boat questions
     let nextStep: number;
     if (isSwimmer) {
       nextStep = 12; // summary
     } else if (data.movementType === "stopped") {
-      nextStep = isBoat ? 13 : 7; // boat: other vessel speed, else: drawing instruction
+      nextStep = isBoat ? 13 : 7; // boat: other boat speed, else: drawing instruction
     } else {
       nextStep = 5; // acceleration
     }
@@ -309,7 +309,7 @@ export function BoatReconstructionFlow() {
     }));
   };
 
-  // Step 5: Acceleration — boat-to-boat goes to other vessel speed (13), else drawing instruction (7)
+  // Step 5: Acceleration — boat-to-boat goes to other boat speed (13), else drawing instruction (7)
   const handleAccelerationComplete = (trend: "accelerating" | "decelerating" | "constant" | "unknown") => {
     setState((prev) => ({
       ...prev,
@@ -321,7 +321,7 @@ export function BoatReconstructionFlow() {
     }));
   };
 
-  // Step 13: Other vessel speed
+  // Step 13: Other boat speed
   const handleOtherSpeedComplete = (data: {
     movementType: "forward" | "reverse" | "stopped";
     speedEstimate: number | null;
@@ -339,7 +339,7 @@ export function BoatReconstructionFlow() {
     }));
   };
 
-  // Step 14: Other vessel acceleration
+  // Step 14: Other boat acceleration
   const handleOtherAccelerationComplete = (trend: "accelerating" | "decelerating" | "constant" | "unknown") => {
     setState((prev) => ({
       ...prev,
@@ -517,12 +517,12 @@ export function BoatReconstructionFlow() {
           : "Tap to place the collision point.";
       case 9:
         return drawComplete
-          ? "Does this look like the collision path taken by your vessel?"
-          : "Draw the collision path your vessel traveled \u2014 just your best recollection.";
+          ? "Does this look like the collision path taken by your boat?"
+          : "Draw the collision path your boat traveled \u2014 just your best recollection.";
       case 10:
         return drawComplete
-          ? "Does this look like the collision path taken by the other vessel?"
-          : "Draw the collision path the other vessel traveled \u2014 just your best recollection.";
+          ? "Does this look like the collision path taken by the other boat?"
+          : "Draw the collision path the other boat traveled \u2014 just your best recollection.";
       default:
         return "";
     }
@@ -536,11 +536,11 @@ export function BoatReconstructionFlow() {
           : "Drag the map to reposition the pin. It\u2019s okay if it\u2019s not exact \u2014 just place it as close as you remember.";
       case 9:
         return drawComplete
-          ? (rotationEnabled ? "Drag the blue handle to rotate your vessel\u2019s orientation." : null)
+          ? (rotationEnabled ? "Drag the blue handle to rotate your boat\u2019s orientation." : null)
           : "Make sure the path touches the collision point.";
       case 10:
         return drawComplete
-          ? (rotationEnabled ? "Drag the blue handle to rotate the other vessel\u2019s orientation." : null)
+          ? (rotationEnabled ? "Drag the blue handle to rotate the other boat\u2019s orientation." : null)
           : "Make sure the path touches the collision point.";
       default:
         return null;
@@ -666,7 +666,7 @@ export function BoatReconstructionFlow() {
         <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
           <Card className="py-8 px-8 flex flex-col gap-8 items-center">
             <SpeedInput
-              vehicleLabel="your vessel"
+              vehicleLabel="your boat"
               onComplete={handleSpeedComplete}
             />
           </Card>
@@ -688,14 +688,14 @@ export function BoatReconstructionFlow() {
     );
   }
 
-  // ─── Step 13: Other vessel speed ───
+  // ─── Step 13: Other boat speed ───
   if (state.currentStep === 13) {
     return (
       <PageShell>
         <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
           <Card className="py-8 px-8 flex flex-col gap-8 items-center">
             <SpeedInput
-              vehicleLabel="the other vessel"
+              vehicleLabel="the other boat"
               onComplete={handleOtherSpeedComplete}
             />
           </Card>
@@ -704,14 +704,14 @@ export function BoatReconstructionFlow() {
     );
   }
 
-  // ─── Step 14: Other vessel acceleration ───
+  // ─── Step 14: Other boat acceleration ───
   if (state.currentStep === 14) {
     return (
       <PageShell>
         <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
           <Card className="py-8 px-8 flex flex-col gap-8 items-center">
             <AccelerationInput
-              vehicleLabel="the other vessel"
+              vehicleLabel="the other boat"
               onComplete={handleOtherAccelerationComplete}
             />
           </Card>
@@ -767,7 +767,7 @@ export function BoatReconstructionFlow() {
                 Now we&apos;ll use a simple drawing tool to show what happened.
               </p>
               <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569]">
-                On the next screen, you&apos;ll use your finger to draw {isBoat ? "each vessel\u2019s" : "your vessel\u2019s"} path, leading up to and after the collision.
+                On the next screen, you&apos;ll use your finger to draw {isBoat ? "each boat\u2019s" : "your boat\u2019s"} path, leading up to and after the collision.
               </p>
               <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#94A3B8] mt-2">
                 This is just a rough sketch — it doesn&apos;t need to be exact.
@@ -830,13 +830,13 @@ export function BoatReconstructionFlow() {
         {(hasYourPath || (state.currentStep === 9 && currentPath.length > 0)) && (
           <div className="flex items-center gap-2 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full shadow-sm">
             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: YOUR_PATH_COLOR }} />
-            <span className="text-xs font-medium text-[#475569]">Your vessel</span>
+            <span className="text-xs font-medium text-[#475569]">Your boat</span>
           </div>
         )}
         {(hasOtherPath || (state.currentStep === 10 && currentPath.length > 0)) && (
           <div className="flex items-center gap-2 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full shadow-sm">
             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: OTHER_PATH_COLOR }} />
-            <span className="text-xs font-medium text-[#475569]">Other vessel</span>
+            <span className="text-xs font-medium text-[#475569]">Other boat</span>
           </div>
         )}
       </div>
@@ -985,7 +985,7 @@ export function BoatReconstructionFlow() {
               </button>
             )}
 
-            {/* Vessel label pills */}
+            {/* Boat label pills */}
             {vehicleLabelPills(isFullscreen ? "bottom-20" : "bottom-3")}
           </div>
 

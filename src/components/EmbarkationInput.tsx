@@ -125,12 +125,9 @@ export function EmbarkationInput({ onConfirm, locationBias = null }: Embarkation
   // Choice screen
   return (
     <div className="flex flex-col items-center w-full">
-      <h2 className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569] text-center mb-[10px]">
-        How would you like to identify the location?
+      <h2 className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569] text-center mb-8">
+        How would you like to identify the location of the incident?
       </h2>
-      <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569] text-center mb-8">
-        Choose how to enter where you embarked from.
-      </p>
 
       <div className="w-full space-y-3">
         <button
@@ -139,7 +136,7 @@ export function EmbarkationInput({ onConfirm, locationBias = null }: Embarkation
         >
           <span className="text-3xl">{"\u{1F4CD}"}</span>
           <div>
-            <p className="font-medium text-[14px] leading-[20px] text-[#475569]">Embarkation point</p>
+            <p className="font-medium text-[14px] leading-[20px] text-[#475569]">Where you embarked from</p>
             <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#94A3B8]">Search by marina, dock, pier, or address</p>
           </div>
         </button>

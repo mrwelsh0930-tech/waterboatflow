@@ -198,7 +198,7 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
               <div className="space-y-1.5">
                 {BOAT_COLLISION_TYPE_OPTIONS
                   .filter((opt) => {
-                    // "Anchored/Moored Boat Struck" only shows if vessel was stopped
+                    // "Anchored/Moored Boat Struck" only shows if boat was stopped
                     if (opt === "Anchored/Moored Boat Struck" && state.yourBoat.movementType !== "stopped") return false;
                     return true;
                   })
@@ -232,10 +232,10 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
           </div>
         )}
 
-        {/* Your vessel info */}
+        {/* Your boat info */}
         <div className="bg-[#F1F5F9] rounded-[8px] p-4">
           <p className="text-[12px] text-[#1660F4] uppercase tracking-wide mb-2">
-            Your vessel
+            Your boat
           </p>
           <div className="space-y-2 text-[14px]">
             {movementLabel && (
@@ -289,7 +289,7 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
           return (
             <div className="bg-[#F1F5F9] rounded-[8px] p-4">
               <p className="text-[12px] text-[#F59E0B] uppercase tracking-wide mb-2">
-                Other vessel
+                Other boat
               </p>
               <div className="space-y-2 text-[14px]">
                 {otherMovementLabel && (
@@ -357,7 +357,7 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
 
             {!isSwimmer && (
               <div className="bg-[#F1F5F9] rounded-[6px] p-3">
-                <p className="text-[11px] text-[#94A3B8] uppercase tracking-wide mb-2">Vessel 1 (Insured)</p>
+                <p className="text-[11px] text-[#94A3B8] uppercase tracking-wide mb-2">Boat 1 (Insured)</p>
                 <div className="space-y-1 text-[12px] font-mono text-[#475569]">
                   <p>Pre-impact: {state.yourBoat.preImpactPath.length} pts</p>
                   <p>Post-impact: {state.yourBoat.postImpactPath.length} pts</p>
@@ -373,7 +373,7 @@ export function BoatSummary({ state, onStartOver, onCollisionTypeOverride }: Boa
 
             {isBoat && "preImpactPath" in state.otherEntity && (
               <div className="bg-[#F1F5F9] rounded-[6px] p-3">
-                <p className="text-[11px] text-[#94A3B8] uppercase tracking-wide mb-2">Vessel 2 (Other)</p>
+                <p className="text-[11px] text-[#94A3B8] uppercase tracking-wide mb-2">Boat 2 (Other)</p>
                 <div className="space-y-1 text-[12px] font-mono text-[#475569]">
                   <p>Pre-impact: {(state.otherEntity as typeof state.yourBoat).preImpactPath.length} pts</p>
                   <p>Post-impact: {(state.otherEntity as typeof state.yourBoat).postImpactPath.length} pts</p>
