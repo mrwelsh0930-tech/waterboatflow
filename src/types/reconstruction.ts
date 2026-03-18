@@ -82,6 +82,7 @@ export const BOAT_STEPS = [
   { id: 5, title: "Speed change", description: "Were you speeding up or slowing down?" },
   { id: 13, title: "Other boat movement", description: "How was the other boat moving?" },
   { id: 14, title: "Other boat speed change", description: "Was the other boat speeding up or slowing down?" },
+  { id: 15, title: "Boat direction", description: "Which direction was your bow facing?" },
   { id: 7, title: "Drawing tool", description: "How this works" },
   { id: 9, title: "Your path", description: "Draw your boat's path" },
   { id: 10, title: "Other path", description: "Draw the other boat's path" },

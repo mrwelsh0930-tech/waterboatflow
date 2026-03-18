@@ -1,19 +1,60 @@
 "use client";
 
 import { useState } from "react";
-import { CollisionEntity, LatLng } from "@/types/fnol";
-import { BoatReconstructionFlow } from "@/components/BoatReconstructionFlow";
+import { LatLng, OperatingState, WaterBodyType, CollisionEntity } from "@/types/fnol";
+import { BoatReconstructionFlow, FnolContext } from "@/components/BoatReconstructionFlow";
 
 interface Props {
   impactPoint: LatLng | null;
   collisionEntities: CollisionEntity[];
   isMarina: boolean | null;
+  waterBodyType: WaterBodyType | null;
+  stateProvince: string;
+  city: string;
+  embarkationAddress: string;
+  embarkationLocation: LatLng | null;
+  operatingState: OperatingState[];
   onComplete: () => void;
   onBack: () => void;
 }
 
-export function Step50CIQ({ onComplete, onBack }: Props) {
+export function Step50CIQ({
+  impactPoint,
+  collisionEntities,
+  isMarina,
+  waterBodyType,
+  stateProvince,
+  city,
+  embarkationAddress,
+  embarkationLocation,
+  operatingState,
+  onComplete,
+  onBack,
+}: Props) {
   const [showFinish, setShowFinish] = useState(false);
+
+  const firstEntity = collisionEntities[0] ?? null;
+  const collisionEntityType = firstEntity
+    ? (firstEntity.type as FnolContext["collisionEntityType"])
+    : null;
+  const collisionEntitySubtype =
+    firstEntity?.propertySubtype ??
+    firstEntity?.animalSubtype ??
+    firstEntity?.objectSubtype ??
+    null;
+
+  const fnolContext: FnolContext = {
+    waterBodyType,
+    stateProvince,
+    city,
+    embarkationAddress,
+    embarkationLocation,
+    impactPoint,
+    isMarina,
+    collisionEntityType,
+    collisionEntitySubtype,
+    operatingState: operatingState as string[],
+  };
 
   return (
     <div className="relative w-full flex flex-col items-center">
@@ -29,7 +70,7 @@ export function Step50CIQ({ onComplete, onBack }: Props) {
       </div>
 
       {/* Embedded CIQ */}
-      <BoatReconstructionFlow />
+      <BoatReconstructionFlow fnolContext={fnolContext} />
 
       {/* Done toggle */}
       <div className="w-full max-w-[393px] mt-4">

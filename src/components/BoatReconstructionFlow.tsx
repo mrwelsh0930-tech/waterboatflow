@@ -91,11 +91,77 @@ function getEntitySticker(type: BoatCollisionEntityType | null, subType: string 
   return null;
 }
 
-export function BoatReconstructionFlow() {
+export interface FnolContext {
+  waterBodyType: WaterBodyType | null;
+  stateProvince: string;
+  city: string;
+  embarkationAddress: string;
+  embarkationLocation: LatLng | null;
+  impactPoint: LatLng | null;
+  isMarina: boolean | null;
+  collisionEntityType: BoatCollisionEntityType | null;
+  collisionEntitySubtype: string | null;
+  operatingState: string[];
+}
+
+function buildStateFromContext(ctx: FnolContext): BoatReconstructionState {
+  const isAnchoredMoored = ctx.operatingState.some(
+    (s) => s === "anchored" || s === "moored"
+  );
+  const otherEntity: BoatData | OtherEntityData =
+    ctx.collisionEntityType === "boat" || ctx.collisionEntityType === null
+      ? { ...INITIAL_BOAT_DATA, id: "other", label: "Other boat" }
+      : {
+          type: ctx.collisionEntityType,
+          entitySubType: ctx.collisionEntitySubtype,
+          label:
+            ctx.collisionEntityType === "fixed-property"
+              ? "Fixed property"
+              : ctx.collisionEntityType === "animal"
+                ? "Animal"
+                : ctx.collisionEntityType === "swimmer"
+                  ? "Swimmer"
+                  : "Object",
+          position: null,
+          description: "",
+        };
+  return {
+    currentStep: isAnchoredMoored ? 15 : 4,
+    waterBodyType: ctx.waterBodyType,
+    stateProvince: ctx.stateProvince,
+    city: ctx.city,
+    embarkationAddress: ctx.embarkationAddress,
+    embarkationLocation: ctx.embarkationLocation,
+    collisionEntityType: ctx.collisionEntityType,
+    impactPoint: ctx.impactPoint,
+    mapBearingAtImpact: null,
+    collisionTypeOverride: null,
+    isMarina: ctx.isMarina,
+    yourBoat: { ...INITIAL_BOAT_DATA, id: "you", label: "Your boat" },
+    otherEntity,
+    derived: {
+      approachAngle: null,
+      separationAngle: null,
+      collisionType: null,
+      pdofClockApprox: null,
+    },
+  };
+}
+
+export function BoatReconstructionFlow({ fnolContext }: { fnolContext?: FnolContext }) {
   const searchParams = useSearchParams();
   const rotationEnabled = searchParams.get("rotation") === "true";
 
-  const [state, setState] = useState<BoatReconstructionState>(INITIAL_STATE);
+  const isAnchoredOrMoored = fnolContext
+    ? fnolContext.operatingState.some((s) => s === "anchored" || s === "moored")
+    : false;
+  const isDrifting = fnolContext
+    ? fnolContext.operatingState.some((s) => s === "drifting")
+    : false;
+
+  const [state, setState] = useState<BoatReconstructionState>(() =>
+    fnolContext ? buildStateFromContext(fnolContext) : INITIAL_STATE
+  );
   const [currentPath, setCurrentPath] = useState<LatLng[]>([]);
   const [drawComplete, setDrawComplete] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -141,12 +207,20 @@ export function BoatReconstructionFlow() {
 
   // Step filtering
   const activeSteps = BOAT_STEPS.filter((step) => {
+    // Skip steps already captured by FNOL upstream
+    if (fnolContext && [0, 1, 2, 3, 6, 8].includes(step.id)) return false;
+    // Skip direction picker (step 15) unless anchored/moored
+    if (!isAnchoredOrMoored && step.id === 15) return false;
+    // Anchored/moored: skip movement/speed, acceleration, and your-path steps
+    if (isAnchoredOrMoored && (step.id === 4 || step.id === 5 || step.id === 9)) return false;
+    // Anchored/moored + non-boat: skip drawing instructions (nothing to draw)
+    if (isAnchoredOrMoored && !isBoat && step.id === 7) return false;
     // Skip "other path" for non-boat collisions
     if (!isBoat && step.id === 10) return false;
     // Skip other boat speed/acceleration for non-boat collisions
     if (!isBoat && (step.id === 13 || step.id === 14)) return false;
-    // Skip acceleration step if stopped (your boat)
-    if (isStopped && step.id === 5) return false;
+    // Skip acceleration step if stopped (your boat) or drifting
+    if ((isStopped || isDrifting) && step.id === 5) return false;
     // Skip other boat acceleration if other boat is stopped
     if (isOtherStopped && step.id === 14) return false;
     // Skip marina + drawing steps for swimmer (no map interaction needed)
@@ -291,7 +365,7 @@ export function BoatReconstructionFlow() {
     let nextStep: number;
     if (isSwimmer) {
       nextStep = 12; // summary
-    } else if (data.movementType === "stopped") {
+    } else if (data.movementType === "stopped" || isDrifting) {
       nextStep = isBoat ? 13 : 7; // boat: other boat speed, else: drawing instruction
     } else {
       nextStep = 5; // acceleration
@@ -357,6 +431,22 @@ export function BoatReconstructionFlow() {
       ...prev,
       isMarina,
       currentStep: 8,
+    }));
+  };
+
+  // Step 15: Direction picker (anchored/moored boats)
+  const handleDirectionSelect = (bearing: number) => {
+    const nextIdx = currentStepIndex + 1;
+    const nextStep = activeSteps[nextIdx];
+    setState((prev) => ({
+      ...prev,
+      yourBoat: {
+        ...prev.yourBoat,
+        rotation: bearing,
+        approachBearing: bearing,
+        movementType: "stopped",
+      },
+      currentStep: nextStep?.id ?? prev.currentStep,
     }));
   };
 
@@ -484,6 +574,7 @@ export function BoatReconstructionFlow() {
       case 6:
       case 13:
       case 14:
+      case 15:
         return false; // These steps have their own handlers
       case 8:
         return state.impactPoint !== null;
@@ -714,6 +805,53 @@ export function BoatReconstructionFlow() {
               vehicleLabel="the other boat"
               onComplete={handleOtherAccelerationComplete}
             />
+          </Card>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ─── Step 15: Direction picker (anchored/moored) ───
+  if (state.currentStep === 15) {
+    const DIRECTIONS = [
+      { label: "NW", arrow: "↖", bearing: 315 },
+      { label: "N",  arrow: "↑", bearing: 0 },
+      { label: "NE", arrow: "↗", bearing: 45 },
+      { label: "W",  arrow: "←", bearing: 270 },
+      { label: "",   arrow: "",  bearing: -1 }, // center (empty)
+      { label: "E",  arrow: "→", bearing: 90 },
+      { label: "SW", arrow: "↙", bearing: 225 },
+      { label: "S",  arrow: "↓", bearing: 180 },
+      { label: "SE", arrow: "↘", bearing: 135 },
+    ];
+    return (
+      <PageShell>
+        <div className="flex-1 flex flex-col items-center justify-center py-6 overflow-y-auto">
+          <Card className="py-8 px-8 flex flex-col gap-6 items-center">
+            <div className="flex flex-col items-center gap-2 text-center">
+              <h2 className="font-medium text-[18px] leading-[28px] tracking-[-0.26px] text-[#475569]">
+                Which direction was your bow facing?
+              </h2>
+              <p className="font-normal text-[14px] leading-[20px] tracking-[-0.09px] text-[#475569]">
+                Since your boat was stationary, select the direction the front of your boat was pointing just before the incident.
+              </p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 w-full max-w-[240px]">
+              {DIRECTIONS.map((d, i) =>
+                d.bearing === -1 ? (
+                  <div key={i} className="h-[64px]" />
+                ) : (
+                  <button
+                    key={d.label}
+                    onClick={() => handleDirectionSelect(d.bearing)}
+                    className="h-[64px] flex flex-col items-center justify-center gap-1 border border-[#D4D4D4] rounded-[8px] hover:border-[#1660F4] hover:bg-[#F1F5F9] active:bg-[#E2E8F0] transition-all"
+                  >
+                    <span className="text-[20px] leading-none">{d.arrow}</span>
+                    <span className="text-[11px] font-medium text-[#475569]">{d.label}</span>
+                  </button>
+                )
+              )}
+            </div>
           </Card>
         </div>
       </PageShell>

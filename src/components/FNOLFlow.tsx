@@ -467,6 +467,12 @@ export function FNOLFlow({ stepId }: Props) {
           impactPoint={state.impactPoint}
           collisionEntities={state.collisionEntities}
           isMarina={isMarina}
+          waterBodyType={state.waterBodyType}
+          stateProvince={state.stateProvince}
+          city={state.city}
+          embarkationAddress={state.embarkationAddress}
+          embarkationLocation={state.embarkationLocation}
+          operatingState={state.operatingState}
           onComplete={() => goForward({ ciqComplete: true })}
           onBack={goBack}
         />
