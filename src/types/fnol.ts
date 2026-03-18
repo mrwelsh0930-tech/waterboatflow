@@ -181,6 +181,15 @@ export interface FNOLState {
   // Navigation
   currentStepId: number;
 
+  // Pre-flow Intake
+  fullName: string;
+  phone: string;
+  incidentDate: string; // e.g. "2026-03-18"
+  incidentTime: string; // e.g. "14:30"
+  filingFor: "myself" | "someone-else" | null;
+  isInsuredByProgressive: boolean | null;
+  isOwner: boolean | null;
+
   // Section 1: Watercraft Identity
   make: string;
   color: string;
@@ -265,7 +274,15 @@ export interface FNOLState {
 // ─── Initial State ────────────────────────────────────────────────────────────
 
 export const INITIAL_FNOL_STATE: FNOLState = {
-  currentStepId: 1,
+  currentStepId: 91,
+
+  fullName: "",
+  phone: "",
+  incidentDate: "",
+  incidentTime: "",
+  filingFor: null,
+  isInsuredByProgressive: null,
+  isOwner: null,
 
   make: "",
   color: "",

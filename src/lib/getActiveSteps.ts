@@ -5,32 +5,41 @@ import type { FNOLState } from "@/types/fnol";
  * state. This is the single source of truth for all branching logic.
  *
  * Step ID ranges:
- *   1–3    Watercraft Identity
+ *   91–95  Pre-flow Intake
+ *   1–3,36 Watercraft Identity
  *   4      Land vs Water fork
  *   5–8,75 Location Entry
  *   9      Immediate Concerns
- *   10–11  Incident Type + Operating State
- *   20–25  Collision GCR
+ *   10–13  Incident Type + Operating State
+ *   20–26  Collision GCR
  *   30–35  Weather branch
  *   40–41  Damage
  *   42–44  Passengers & Pets
  *   50     CIQ (full sub-flow handled internally by CIQ components)
- *   60–62  Documentation
+ *   60–63  Documentation
  *   70     Summary
  */
 export function getActiveSteps(state: FNOLState): number[] {
   const steps: number[] = [];
 
-  // ── Section 1: Watercraft Identity (always) ───────────────────────────────
-  steps.push(1); // Make/manufacturer
-  steps.push(2); // Color
-  steps.push(3); // Boat type
+  // ── Pre-flow Intake ───────────────────────────────────────────────────────
+  steps.push(91); // Safety check
+  steps.push(92); // Name + phone + consent
+  steps.push(93); // Incident date + time
+  steps.push(94); // Filing on behalf of
+  steps.push(95); // Insured by Progressive?
 
-  // ── Section 2: Land vs Water fork ────────────────────────────────────────
+  // ── Section 2: Land vs Water fork (asked early, before identity) ──────────
   steps.push(4); // Land or water?
 
   // If not on water, flow ends at step 4 (modal shown, no further steps)
   if (state.isOnWater === false) return steps;
+
+  // ── Section 1: Watercraft Identity ────────────────────────────────────────
+  steps.push(1); // Make/manufacturer
+  steps.push(2); // Color
+  steps.push(3); // Boat type
+  steps.push(36); // Are you the owner?
 
   // ── Section 3: Location Entry ─────────────────────────────────────────────
   steps.push(5); // State + city
@@ -54,17 +63,14 @@ export function getActiveSteps(state: FNOLState): number[] {
   steps.push(9); // Urgent conditions multi-select
 
   // ── Section 5: Incident Type + Operating State ───────────────────────────
-  // Skip "What happened" if urgent — go straight to CIQ
   if (!state.isUrgent) {
     steps.push(10); // What happened?
-    // "Other" + water assistance terminates — no further steps
     if (
       state.incidentType === "other" &&
       state.otherIncidentSubtype === "water-assistance"
     ) {
       return steps;
     }
-    // "Other" (non-water-assistance): show "Help us understand" + "Tell me more"
     if (state.incidentType === "other") {
       steps.push(11); // Help us understand sub-screen
       steps.push(12); // Tell me more free-form
@@ -81,7 +87,6 @@ export function getActiveSteps(state: FNOLState): number[] {
   if (showCollision) {
     steps.push(20); // What did your boat collide with? (multi-select)
 
-    // Per-entity sequential follow-ups (one step per entity; component handles sub-screens internally)
     state.collisionEntities.forEach((entity, idx) => {
       const base = 200 + idx * 10;
       if (
@@ -91,34 +96,33 @@ export function getActiveSteps(state: FNOLState): number[] {
       ) {
         steps.push(base + 1);
       }
-      // boat and swimmer: no follow-up question
     });
 
     steps.push(21); // Where in the water?
 
     const hasOtherBoat = state.collisionEntities.some((e) => e.type === "boat");
     if (hasOtherBoat) {
-      steps.push(22); // Collision type (Overtaken / Crossing / Docking / Other)
+      steps.push(22); // Collision type
 
       if (state.collisionType === "overtaken") {
-        steps.push(23); // Navigational rules + under power questions
+        steps.push(23);
       } else if (state.collisionType === "boats-crossing") {
-        steps.push(24); // Right of way
+        steps.push(24);
       } else if (state.collisionType === "docking-undocking") {
-        steps.push(25); // Docking questions + right of way
+        steps.push(25);
       } else if (state.collisionType === "other") {
-        steps.push(24); // Right of way (reuse same screen)
+        steps.push(24);
       }
 
-      steps.push(26); // Other party: type + operating state + color + insurance card
+      steps.push(26); // Other party
     }
   }
 
   // ── Section 7B: Weather Branch ────────────────────────────────────────────
   if (state.incidentType === "weather") {
-    steps.push(30); // Active weather warning?
-    steps.push(31); // Storm name?
-    steps.push(32); // Conditions (multi-select)
+    steps.push(30);
+    steps.push(31);
+    steps.push(32);
 
     const isSecuredState =
       state.operatingState.includes("anchored") ||
@@ -126,47 +130,42 @@ export function getActiveSteps(state: FNOLState): number[] {
       state.operatingState.includes("docked");
 
     if (isSecuredState) {
-      steps.push(33); // Was boat secured/tied up?
+      steps.push(33);
       if (state.boatWasSecured) {
-        steps.push(34); // Did it break free?
+        steps.push(34);
       }
     }
-    steps.push(35); // Precautions taken (multi-select)
-    // Weather branch rejoins main flow — continues to damage/passengers/docs/summary
+    steps.push(35);
   }
 
   // ── Sections 8 & 9: Damage + Passengers ──────────────────────────────────
-  steps.push(40); // Can you see the damage?
-  if (state.damageVisible !== null) {
-    // skip only if explicitly "mechanical/electrical only" (damageVisible === null means skipped)
-  }
-  steps.push(41); // Propulsion damage?
+  steps.push(40);
+  steps.push(41);
   if (state.propulsionDamaged) {
-    steps.push(410); // Which propulsion parts?
+    steps.push(410);
   }
 
-  steps.push(42); // How many parties involved?
+  steps.push(42);
   if (state.towActivities.length > 0) {
-    steps.push(43); // Life vest question
+    steps.push(43);
   }
-  steps.push(44); // Pet onboard?
+  steps.push(44);
 
   // ── Section 10: CIQ ──────────────────────────────────────────────────────
-  // Show CIQ for collision branch or urgent skip
   if (showCollision) {
-    steps.push(50); // CIQ (sub-flow managed internally)
+    steps.push(50);
   }
 
   // ── Section 11: Documentation ─────────────────────────────────────────────
-  steps.push(60); // Coast guard report?
+  steps.push(60);
   if (state.coastGuardReportFiled) {
-    steps.push(61); // Coast guard report photo upload
+    steps.push(61);
   }
-  steps.push(62); // Additional photos?
-  steps.push(63); // Photo description
+  steps.push(62);
+  steps.push(63);
 
   // ── Section 12: Summary ───────────────────────────────────────────────────
-  steps.push(70); // Summary
+  steps.push(70);
 
   return steps;
 }

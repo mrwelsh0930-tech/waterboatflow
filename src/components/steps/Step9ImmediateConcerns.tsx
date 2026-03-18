@@ -21,7 +21,6 @@ const CONCERNS: { value: ImmediateConcern; label: string; emoji: string }[] = [
   { value: "adrift", label: "Adrift and unable to operate", emoji: "🌀" },
   { value: "capsized", label: "Capsized", emoji: "🔄" },
   { value: "fire", label: "Caught fire", emoji: "🔥" },
-  { value: "towed", label: "Has been towed", emoji: "🔗" },
 ];
 
 export function Step9ImmediateConcerns({ boatLabel, onContinue, onBack }: Props) {

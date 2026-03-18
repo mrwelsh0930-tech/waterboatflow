@@ -5,6 +5,12 @@ import { CollisionEntity } from "@/types/fnol";
 import { getProgressPercent } from "@/lib/getActiveSteps";
 
 // Steps
+import { Step91Safety } from "@/components/steps/Step91Safety";
+import { Step92NamePhone } from "@/components/steps/Step92NamePhone";
+import { Step93IncidentDate } from "@/components/steps/Step93IncidentDate";
+import { Step94FilingFor } from "@/components/steps/Step94FilingFor";
+import { Step95Progressive } from "@/components/steps/Step95Progressive";
+import { Step36Owner } from "@/components/steps/Step36Owner";
 import { Step1Make } from "@/components/steps/Step1Make";
 import { Step2Color } from "@/components/steps/Step2Color";
 import { Step3BoatType } from "@/components/steps/Step3BoatType";
@@ -112,12 +118,66 @@ export function FNOLFlow({ stepId }: Props) {
   let content: React.ReactNode;
 
   switch (stepId) {
+    // ── Pre-flow Intake ───────────────────────────────────────────────────────
+    case 91:
+      content = (
+        <Step91Safety onContinue={() => goForward({})} />
+      );
+      break;
+
+    case 92:
+      content = (
+        <Step92NamePhone
+          fullName={state.fullName}
+          phone={state.phone}
+          onContinue={(fullName, phone) => goForward({ fullName, phone })}
+          onBack={goBack}
+        />
+      );
+      break;
+
+    case 93:
+      content = (
+        <Step93IncidentDate
+          incidentDate={state.incidentDate}
+          incidentTime={state.incidentTime}
+          onContinue={(incidentDate, incidentTime) => goForward({ incidentDate, incidentTime })}
+          onBack={goBack}
+        />
+      );
+      break;
+
+    case 94:
+      content = (
+        <Step94FilingFor
+          onContinue={(filingFor) => goForward({ filingFor })}
+          onBack={goBack}
+        />
+      );
+      break;
+
+    case 95:
+      content = (
+        <Step95Progressive
+          fullName={state.fullName}
+          onContinue={(isInsuredByProgressive) => goForward({ isInsuredByProgressive })}
+          onBack={goBack}
+        />
+      );
+      break;
+
+    // ── Section 2: Land vs Water ──────────────────────────────────────────────
+    // (moved before Section 1 in step ordering — case 4 handles it below)
+
     // ── Section 1: Watercraft Identity ──────────────────────────────────────
     case 1:
       content = (
         <Step1Make
           value={state.make}
-          onContinue={(make) => goForward({ make })}
+          onContinue={(make) => {
+            const boatLabel = [state.color !== "Unknown" ? state.color : "", make].filter(Boolean).join(" ") || "your boat";
+            goForward({ make, boatLabel });
+          }}
         />
       );
       break;
@@ -126,7 +186,10 @@ export function FNOLFlow({ stepId }: Props) {
       content = (
         <Step2Color
           value={state.color}
-          onContinue={(color) => goForward({ color })}
+          onContinue={(color) => {
+            const boatLabel = [color !== "Unknown" ? color : "", state.make].filter(Boolean).join(" ") || "your boat";
+            goForward({ color, boatLabel });
+          }}
           onBack={goBack}
         />
       );
@@ -137,6 +200,17 @@ export function FNOLFlow({ stepId }: Props) {
         <Step3BoatType
           value={state.boatType}
           onContinue={(boatType) => goForward({ boatType })}
+          onBack={goBack}
+        />
+      );
+      break;
+
+    case 36:
+      content = (
+        <Step36Owner
+          fullName={state.fullName}
+          boatLabel={boatLabel}
+          onContinue={(isOwner) => goForward({ isOwner })}
           onBack={goBack}
         />
       );
