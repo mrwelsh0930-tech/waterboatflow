@@ -6,10 +6,18 @@ import { FNOLState, INITIAL_FNOL_STATE } from "@/types/fnol";
 import { getNextStep, getPrevStep } from "@/lib/getActiveSteps";
 
 const STORAGE_KEY = "waterboatflow_fnol_state";
+const STORAGE_VERSION = "v3"; // bump when state shape changes to auto-clear stale data
+const STORAGE_VERSION_KEY = "waterboatflow_fnol_version";
 
 function loadFromStorage(): FNOLState {
   if (typeof window === "undefined") return INITIAL_FNOL_STATE;
   try {
+    const version = localStorage.getItem(STORAGE_VERSION_KEY);
+    if (version !== STORAGE_VERSION) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(STORAGE_VERSION_KEY, STORAGE_VERSION);
+      return INITIAL_FNOL_STATE;
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return INITIAL_FNOL_STATE;
     return { ...INITIAL_FNOL_STATE, ...JSON.parse(raw) };
@@ -103,7 +111,7 @@ export function useFNOLState(initialStepId?: number) {
   const restart = useCallback(() => {
     clearFNOLState();
     setStateRaw(INITIAL_FNOL_STATE);
-    router.push("/step/1");
+    router.push("/step/91");
   }, [router]);
 
   return { state, setState, goForward, goBack, goToStep, restart };
