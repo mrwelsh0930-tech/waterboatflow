@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "CollisionIQ — Boats",
-  description: "Marine collision reconstruction",
+  title: "Boat FNOL — Assured",
+  description: "Boat on water FNOL intake flow",
 };
 
 export default function RootLayout({

@@ -1,10 +1,5 @@
-import { Suspense } from "react";
-import { BoatReconstructionFlow } from "@/components/BoatReconstructionFlow";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return (
-    <Suspense>
-      <BoatReconstructionFlow />
-    </Suspense>
-  );
+  redirect("/step/1");
 }

@@ -36,7 +36,7 @@ const ANIMAL_SALTWATER = [
 const ANIMAL_FRESHWATER = [
   { value: "fish", label: "Fish", icon: "\uD83D\uDC1F" },
   { value: "duck", label: "Duck", icon: "\uD83E\uDD86" },
-  { value: "goose", label: "Goose", icon: "\uD83E\uDEB3" },
+  { value: "goose", label: "Goose", icon: "\uD83E\uDEBF" },
   { value: "turtle", label: "Turtle", icon: "\uD83D\uDC22" },
   { value: "other", label: "Other animal", icon: "\uD83D\uDC3E" },
 ];
